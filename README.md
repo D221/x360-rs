@@ -3,11 +3,12 @@
 [![CI](https://github.com/D221/tu_parser/actions/workflows/ci.yml/badge.svg)](https://github.com/D221/tu_parser/actions/workflows/ci.yml)
 
 A small command-line tool that reads Xbox 360 **Title Update (TU)**,
-**DLC / Marketplace**, **XBLA**, **avatar**, **theme**, and **indie** content
-(`TU_*`, `tu*`, content hashes) stored in `LIVE`/STFS containers and prints
+**DLC / Marketplace**, **XBLA**, **avatar**, **theme**, and **indie** content,
+raw and optimized **XISOs**, **Games on Demand (GoD)** headers, standalone
+**XEX**/**XBE** executables, and **extracted game directories** — and prints
 what they contain:
-game title, media ID, region mask/regions (TU only), XEX execution info
-(full game XEXs), and the file listing with sizes.
+game title, media ID, region mask/regions (TU only), XEX execution info,
+and file listings with sizes.
 
 No GUI, no dependencies on the original tools — everything is parsed
 directly from the TU file itself. Accepts all three STFS container magics:
@@ -29,7 +30,17 @@ directly from the TU file itself. Accepts all three STFS container magics:
 - Lists the STFS file table (64-byte entries at `0xC000`, densely packed —
   scan stops at the first all-zero slot, bounded by the embedded XEX offset):
   filename, table offset, file size (BE u32 at entry+`0x34`), directory flag
-- Text or JSON output, single files or whole directories (`--dir`, `--recursive`)
+- Parses raw **XISO/GDF** images (`MICROSOFT*XBOX*MEDIA` at sector `0x20`,
+  XSF/XGD2/XGD1/XGD3 data offsets): volume descriptor, recursive directory
+  tables, `default.xex`/`default.xbe` resolution — fully streaming, safe on
+  multi-GB images
+- Parses standalone **XEX** (`ExecutionId`) and **XBE** (title/version)
+  executables, and extracted game directories (`--game-dir`: tree stats +
+  executable info)
+- Text or JSON output, single files or whole directories (`--dir`,
+  `--recursive`). JSON reports are tagged unions (`"type": "stfs" |
+  "xiso" | "xex" | "xbe" | "gamedir"`). Unrecognized files in directory
+  sweeps warn and continue instead of aborting the run.
 
 ## Building
 
@@ -55,6 +66,9 @@ tu_parser file1 file2 --format json -o results.json
 # Whole directory, optionally recursive
 tu_parser --dir ./TUs --recursive
 
+# Extracted game directory
+tu_parser --game-dir ./extracted-game
+
 # Extra detail
 tu_parser file --show-entries --show-strings -v
 ```
@@ -63,9 +77,10 @@ tu_parser file --show-entries --show-strings -v
 
 | Flag | Description |
 | ---- | ----------- |
-| `[FILES]...` | One or more TU files to parse |
+| `[FILES]...` | One or more files to parse (format auto-detected) |
 | `--dir <DIR>` | Parse all files directly inside a directory (conflicts with `[FILES]`) |
 | `--recursive` | With `--dir`: descend into subdirectories |
+| `--game-dir <DIR>` | Parse an extracted game directory (tree stats + `default.xex`/`.xbe`) |
 | `-f, --format <text\|json>` | Output format (default: `text`) |
 | `-o, --output <FILE>` | Write output to a file instead of stdout |
 | `--show-entries` | Always list all directory entries (default lists them when ≤ 50) |

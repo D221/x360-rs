@@ -12,6 +12,8 @@ use thiserror::Error;
 pub enum TuError {
     #[error("Not a valid STFS container: expected 'LIVE', 'CON ' or 'PIRS' magic, got {0:08X}")]
     InvalidMagic(u32),
+    #[error("Unrecognized file format (not STFS, XEX, XBE or XISO)")]
+    UnknownFormat,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -38,6 +40,7 @@ pub const CONTENT_MARKETPLACE: u32 = 0x00000002;
 pub const CONTENT_XBLA: u32 = 0x000D0000;
 pub const CONTENT_AVATAR: u32 = 0x00009000;
 pub const CONTENT_THEME: u32 = 0x00030000;
+pub const CONTENT_GOD: u32 = 0x00007000;
 
 /// Human-readable content-type name.
 pub fn content_type_name(content_type: u32) -> &'static str {
@@ -47,6 +50,7 @@ pub fn content_type_name(content_type: u32) -> &'static str {
         CONTENT_XBLA => "Xbox Live Arcade (XBLA)",
         CONTENT_AVATAR => "Avatar Item",
         CONTENT_THEME => "Theme",
+        CONTENT_GOD => "Games on Demand (GoD)",
         _ => "Unknown",
     }
 }
@@ -112,6 +116,195 @@ pub fn parse_xex_exec_info(buf: &[u8], xex_offset: usize) -> Option<XexExecInfo>
     None
 }
 
+/// Raw Xbox 360 ISO (GDF/GDFX) support, mirroring iso2god-rs `src/iso/`.
+/// Everything is seek-based so multi-GB images never get loaded.
+pub const SECTOR_SIZE: u64 = 0x800;
+
+/// ISO data placement, in iso2god's detection order (XSF first, XGD3 last
+/// as fallback). See iso2god-rs `src/iso/iso_type.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IsoType {
+    Xsf,
+    Xgd2,
+    Xgd1,
+    Xgd3,
+}
+
+impl IsoType {
+    pub fn name(self) -> &'static str {
+        match self {
+            IsoType::Xsf => "XSF",
+            IsoType::Xgd2 => "XGD2",
+            IsoType::Xgd1 => "XGD1",
+            IsoType::Xgd3 => "XGD3",
+        }
+    }
+
+    pub fn root_offset(self) -> u64 {
+        match self {
+            IsoType::Xsf => 0,
+            IsoType::Xgd2 => 0xFD90000,
+            IsoType::Xgd1 => 0x18300000,
+            IsoType::Xgd3 => 0x2080000,
+        }
+    }
+}
+
+/// GDF directory entry attribute flags (iso2god-rs `src/iso/directory_table.rs`).
+pub const GDF_ATTR_DIRECTORY: u8 = 0x10;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IsoEntry {
+    pub path: String,
+    pub sector: u32,
+    pub size: u64,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IsoInfo {
+    pub file_path: String,
+    pub file_size: u64,
+    pub iso_type: String,
+    pub root_sector: u32,
+    pub root_size: u32,
+    pub volume_sectors: u64,
+    pub xex_exec: Option<XexExecInfo>,
+    pub xbe_info: Option<XbeInfo>,
+    pub executable: Option<String>,
+    pub entries: Vec<IsoEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XbeInfo {
+    pub title_id: String,
+    pub version: String,
+}
+
+/// Parse an original-Xbox XBE header: magic "XBEH", title ID LE u32 at +8,
+/// version LE u32 at +176 (iso2god-rs `TitleExecutionInfo::from_xbe`).
+pub fn parse_xbe_info(buf: &[u8]) -> Option<XbeInfo> {
+    if buf.len() < 180 || &buf[0..4] != b"XBEH" {
+        return None;
+    }
+    let le = |o: usize| u32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]);
+    Some(XbeInfo {
+        title_id: format!("{:08X}", le(8)),
+        version: format!("{:08X}", le(176)),
+    })
+}
+
+/// Detect the ISO type by probing for `MICROSOFT*XBOX*MEDIA` at sector 0x20
+/// plus each type's root offset. Returns the type and its root offset.
+pub fn detect_iso_type(
+    reader: &mut (impl Read + Seek),
+    file_size: u64,
+) -> Result<Option<(IsoType, u64)>> {
+    for iso_type in [IsoType::Xsf, IsoType::Xgd2, IsoType::Xgd1, IsoType::Xgd3] {
+        let at = 0x20 * SECTOR_SIZE + iso_type.root_offset();
+        if at + 20 > file_size {
+            continue;
+        }
+        reader.seek(SeekFrom::Start(at))?;
+        let mut magic = [0u8; 20];
+        reader.read_exact(&mut magic)?;
+        if &magic == b"MICROSOFT*XBOX*MEDIA" {
+            return Ok(Some((iso_type, iso_type.root_offset())));
+        }
+    }
+    Ok(None)
+}
+
+fn read_u16_le(reader: &mut (impl Read + Seek)) -> Result<u16> {
+    let mut b = [0u8; 2];
+    reader.read_exact(&mut b)?;
+    Ok(u16::from_le_bytes(b))
+}
+
+fn read_u32_le(reader: &mut (impl Read + Seek)) -> Result<u32> {
+    let mut b = [0u8; 4];
+    reader.read_exact(&mut b)?;
+    Ok(u32::from_le_bytes(b))
+}
+
+/// Walk one GDF directory table, flattening entries to `prefix`-joined paths.
+/// Mirrors iso2god-rs `DirectoryTable::read` / `DirectoryEntry::read`.
+fn walk_gdf_table(
+    reader: &mut (impl Read + Seek),
+    root_offset: u64,
+    prefix: &str,
+    sector: u32,
+    size: u32,
+    depth: usize,
+    out: &mut Vec<IsoEntry>,
+) -> Result<()> {
+    if depth > 32 || out.len() > 200_000 {
+        return Ok(());
+    }
+    let sector_count = size.div_ceil(SECTOR_SIZE as u32);
+    for sector_index in 0..sector_count {
+        let sector_pos = (sector + sector_index) as u64 * SECTOR_SIZE + root_offset;
+        reader.seek(SeekFrom::Start(sector_pos))?;
+        loop {
+            let left = read_u16_le(reader)?;
+            let right = read_u16_le(reader)?;
+            if left == 0xFFFF || right == 0xFFFF {
+                break;
+            }
+            let ent_sector = read_u32_le(reader)?;
+            let ent_size = read_u32_le(reader)?;
+            if ent_size == 0 {
+                break;
+            }
+            let mut ab = [0u8; 1];
+            reader.read_exact(&mut ab)?;
+            let attrs = ab[0];
+            reader.read_exact(&mut ab)?;
+            let name_len = ab[0] as usize;
+            let mut name = vec![0u8; name_len];
+            reader.read_exact(&mut name)?;
+            let name = String::from_utf8_lossy(&name).into_owned();
+            let pos = reader.stream_position()?;
+            let pad = ((4 - pos % 4) % 4) as i64;
+            reader.seek(SeekFrom::Current(pad))?;
+
+            let is_dir = attrs & GDF_ATTR_DIRECTORY != 0;
+            let path = if prefix.is_empty() {
+                name.clone()
+            } else {
+                format!("{prefix}\\{name}")
+            };
+            if is_dir {
+                out.push(IsoEntry {
+                    path: path.clone(),
+                    sector: ent_sector,
+                    size: ent_size as u64,
+                    is_dir: true,
+                });
+                let resume = reader.stream_position()?;
+                walk_gdf_table(
+                    reader,
+                    root_offset,
+                    &path,
+                    ent_sector,
+                    ent_size,
+                    depth + 1,
+                    out,
+                )?;
+                reader.seek(SeekFrom::Start(resume))?;
+            } else {
+                out.push(IsoEntry {
+                    path,
+                    sector: ent_sector,
+                    size: ent_size as u64,
+                    is_dir: false,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 // Region bitmask mapping, confirmed via REA/Ghidra against
 // Title Update Checker_unpacked.exe (evidence ev_15f0a71c..., ev_a5b10f23...,
 // read_bytes at 0x4032e0-0x4036c0):
@@ -166,6 +359,44 @@ pub fn collapse_regions(detailed: &[String]) -> Vec<String> {
     out
 }
 
+/// Read exactly `len` bytes at `offset`. Short reads (EOF) are an error.
+fn read_at(reader: &mut (impl Read + Seek), offset: u64, len: usize) -> Result<Vec<u8>> {
+    reader.seek(SeekFrom::Start(offset))?;
+    let mut buf = vec![0u8; len];
+    reader.read_exact(&mut buf)?;
+    Ok(buf)
+}
+
+/// Locate the embedded `XEX2` magic with a chunked streaming search so
+/// multi-hundred-MB containers never get loaded into memory.
+fn find_xex_offset(reader: &mut (impl Read + Seek), file_size: u64) -> Result<Option<u64>> {
+    const CHUNK: usize = 1024 * 1024;
+    const OVERLAP: usize = 3; // len("XEX2") - 1, catches split magics
+    let mut buf = vec![0u8; CHUNK + OVERLAP];
+    let mut base: u64 = 0; // file offset of buf[0]
+    let mut valid: usize = 0; // carry-over bytes at buf start
+    loop {
+        let pos = base + valid as u64;
+        if pos >= file_size {
+            break;
+        }
+        let want = ((file_size - pos).min(CHUNK as u64)) as usize;
+        reader.seek(SeekFrom::Start(pos))?;
+        reader.read_exact(&mut buf[valid..valid + want])?;
+        let total = valid + want;
+        if let Some(hit) = buf[..total].windows(4).position(|w| w == b"XEX2") {
+            return Ok(Some(base + hit as u64));
+        }
+        if want < CHUNK {
+            break;
+        }
+        buf.copy_within(total - OVERLAP..total, 0);
+        base += (total - OVERLAP) as u64;
+        valid = OVERLAP;
+    }
+    Ok(None)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuHeader {
     pub magic: u32,                    // 0x0000: "LIVE" (LE u32 0x4556494C)
@@ -180,7 +411,7 @@ pub struct TuHeader {
 }
 
 impl TuHeader {
-    pub fn read(reader: &mut (impl Read + Seek), file_size: u64) -> Result<Self> {
+    pub fn read(mut reader: &mut (impl Read + Seek), file_size: u64) -> Result<Self> {
         reader.seek(SeekFrom::Start(0))?;
         let magic = reader.read_u32::<LittleEndian>()?;
         if magic != MAGIC_LIVE && magic != MAGIC_CON && magic != MAGIC_PIRS {
@@ -222,34 +453,33 @@ impl TuHeader {
         }
         let display_title = String::from_utf16_lossy(&title_units);
 
-        // Locate embedded XEX2. Only TU *patch* XEXs carry the region
-        // mask at xex_offset + 0x1A0 — full game XEXs (XBLA etc.) have a
-        // real header there instead, so only read the mask for title updates.
-        // Full game XEXs do carry ExecutionId (field 0x00040006) with
-        // media/version/title IDs (iso2god-rs src/executable/xex.rs).
-        reader.seek(SeekFrom::Start(0))?;
-        let mut buf = vec![0u8; file_size as usize];
-        reader.read_exact(&mut buf)?;
-        let xex_offset = buf.windows(4).position(|w| w == b"XEX2").map(|p| p as u64);
+        // Locate embedded XEX2 with a chunked streaming search (never load
+        // the whole file: TUs can be hundreds of MB). Only TU *patch* XEXs
+        // carry the region mask at xex_offset + 0x1A0 — full game XEXs
+        // (XBLA etc.) have a real header there instead, so only read the
+        // mask for title updates. Full game XEXs do carry ExecutionId
+        // (field 0x00040006) with media/version/title IDs
+        // (iso2god-rs src/executable/xex.rs).
+        let xex_offset = find_xex_offset(&mut reader, file_size)?;
         let is_tu = content_type == CONTENT_TITLE_UPDATE;
         let region_mask = if is_tu {
-            xex_offset.and_then(|x| {
-                let roff = x as usize + 0x1A0;
-                if roff + 4 <= buf.len() {
-                    Some(u32::from_be_bytes([
-                        buf[roff],
-                        buf[roff + 1],
-                        buf[roff + 2],
-                        buf[roff + 3],
-                    ]))
-                } else {
-                    None
-                }
-            })
+            xex_offset
+                .and_then(|x| read_at(&mut reader, x + 0x1A0, 4).ok())
+                .and_then(|b| {
+                    <[u8; 4]>::try_from(b.as_slice())
+                        .map(u32::from_be_bytes)
+                        .ok()
+                })
         } else {
             None
         };
-        let xex_exec = xex_offset.and_then(|x| parse_xex_exec_info(&buf, x as usize));
+        // The ExecutionId struct always sits near the header start; a 64 KiB
+        // window is plenty (observed < 10 KiB) and keeps big files fast.
+        let xex_exec = xex_offset.and_then(|x| {
+            read_at(&mut reader, x, 0x10000)
+                .ok()
+                .and_then(|win| parse_xex_exec_info(&win, 0))
+        });
 
         Ok(TuHeader {
             magic,
@@ -291,6 +521,263 @@ pub struct TuInfo {
     pub xex_exec: Option<XexExecInfo>,
     pub directory_entries: Vec<DirectoryEntry>,
     pub raw_strings: Vec<(u64, String)>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XexFileInfo {
+    pub file_path: String,
+    pub file_size: u64,
+    pub exec: XexExecInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XbeFileInfo {
+    pub file_path: String,
+    pub file_size: u64,
+    pub info: XbeInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameDirInfo {
+    pub dir_path: String,
+    pub files: u64,
+    pub dirs: u64,
+    pub total_bytes: u64,
+    pub executable: Option<String>,
+    pub xex_exec: Option<XexExecInfo>,
+    pub xbe_info: Option<XbeInfo>,
+}
+
+/// Top-level report. Internally tagged, so JSON gains a `"type"` field:
+/// `stfs`, `xiso`, `xex`, `xbe` or `gamedir`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Report {
+    Stfs(TuInfo),
+    Xiso(IsoInfo),
+    Xex(XexFileInfo),
+    Xbe(XbeFileInfo),
+    GameDir(GameDirInfo),
+}
+
+/// Dispatch on magic bytes: STFS (`LIVE`/`CON `/`PIRS`), standalone
+/// `XEX2`/`XBEH` executables, else an XISO probe (GDF magic at the
+/// per-type data offset).
+pub fn parse_file(path: &PathBuf) -> Result<Report> {
+    let file = File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let file_size = file.metadata()?.len();
+    let mut reader = BufReader::new(file);
+    let mut magic = [0u8; 4];
+    reader.read_exact(&mut magic).context("File too small")?;
+    let magic_le = u32::from_le_bytes(magic);
+
+    if magic_le == MAGIC_LIVE || magic_le == MAGIC_CON || magic_le == MAGIC_PIRS {
+        drop(reader);
+        let mut parser = TuParser::open(path)?;
+        let mut info = parser.parse()?;
+        info.file_path = path.display().to_string();
+        return Ok(Report::Stfs(info));
+    }
+    if &magic == b"XEX2" {
+        drop(reader);
+        let mut file = File::open(path)?;
+        let mut reader = BufReader::new(&mut file);
+        let win = read_window(&mut reader, 0, 0x40000, file_size)?;
+        let exec = parse_xex_exec_info(&win, 0).context("XEX without ExecutionId")?;
+        return Ok(Report::Xex(XexFileInfo {
+            file_path: path.display().to_string(),
+            file_size,
+            exec,
+        }));
+    }
+    if &magic == b"XBEH" {
+        drop(reader);
+        let mut file = File::open(path)?;
+        let mut reader = BufReader::new(&mut file);
+        let win = read_window(&mut reader, 0, 0x400, file_size)?;
+        let info = parse_xbe_info(&win).context("Unrecognized XBE header")?;
+        return Ok(Report::Xbe(XbeFileInfo {
+            file_path: path.display().to_string(),
+            file_size,
+            info,
+        }));
+    }
+    if detect_iso_type(&mut reader, file_size)?.is_some() {
+        drop(reader);
+        return Ok(Report::Xiso(parse_iso(path, file_size)?));
+    }
+    Err(TuError::UnknownFormat.into())
+}
+
+/// Read up to `len` bytes at `offset` (clamped to EOF; short final reads OK).
+fn read_window(
+    reader: &mut (impl Read + Seek),
+    offset: u64,
+    len: usize,
+    file_size: u64,
+) -> Result<Vec<u8>> {
+    if offset >= file_size {
+        return Ok(Vec::new());
+    }
+    let len = len.min((file_size - offset) as usize);
+    read_at(reader, offset, len)
+}
+
+/// Parse a raw XISO/GDF image: detect type, read the volume descriptor,
+/// walk the directory tables, then resolve `default.xex`/`default.xbe`.
+pub fn parse_iso(path: &PathBuf, file_size: u64) -> Result<IsoInfo> {
+    let file = File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
+    let mut reader = BufReader::new(file);
+    let (iso_type, root_offset) =
+        detect_iso_type(&mut reader, file_size)?.ok_or(TuError::UnknownFormat)?;
+
+    let desc_at = 0x20 * SECTOR_SIZE + root_offset;
+    reader.seek(SeekFrom::Start(desc_at))?;
+    let mut ident = [0u8; 20];
+    reader.read_exact(&mut ident)?;
+    let root_sector = read_u32_le(&mut reader)?;
+    let root_size = read_u32_le(&mut reader)?;
+    let volume_sectors = file_size.saturating_sub(root_offset) / SECTOR_SIZE;
+
+    let mut entries = Vec::new();
+    walk_gdf_table(
+        &mut reader,
+        root_offset,
+        "",
+        root_sector,
+        root_size,
+        0,
+        &mut entries,
+    )?;
+
+    // Prefer a top-level executable, fall back to any nested match.
+    let pick = |names: &[&str]| -> Option<IsoEntry> {
+        entries
+            .iter()
+            .find(|e| {
+                !e.is_dir
+                    && !e.path.contains('\\')
+                    && names.iter().any(|n| e.path.eq_ignore_ascii_case(n))
+            })
+            .or_else(|| {
+                entries.iter().find(|e| {
+                    !e.is_dir
+                        && names.iter().any(|n| {
+                            e.path
+                                .rsplit('\\')
+                                .next()
+                                .is_some_and(|f| f.eq_ignore_ascii_case(n))
+                        })
+                })
+            })
+            .cloned()
+    };
+    let mut executable = None;
+    let mut xex_exec = None;
+    let mut xbe_info = None;
+    if let Some(e) = pick(&["default.xex"]) {
+        executable = Some(e.path.clone());
+        let at = root_offset + e.sector as u64 * SECTOR_SIZE;
+        if let Ok(win) = read_window(&mut reader, at, 0x40000, file_size) {
+            xex_exec = parse_xex_exec_info(&win, 0);
+        }
+    } else if let Some(e) = pick(&["default.xbe"]) {
+        executable = Some(e.path.clone());
+        let at = root_offset + e.sector as u64 * SECTOR_SIZE;
+        if let Ok(win) = read_window(&mut reader, at, 0x400, file_size) {
+            xbe_info = parse_xbe_info(&win);
+        }
+    }
+
+    Ok(IsoInfo {
+        file_path: path.display().to_string(),
+        file_size,
+        iso_type: iso_type.name().to_string(),
+        root_sector,
+        root_size,
+        volume_sectors,
+        xex_exec,
+        xbe_info,
+        executable,
+        entries,
+    })
+}
+
+/// Parse an extracted game directory: tree stats plus `default.xex` /
+/// `default.xbe` execution info (top level preferred).
+pub fn parse_game_dir(dir: &PathBuf) -> Result<GameDirInfo> {
+    let mut files: u64 = 0;
+    let mut dirs: u64 = 0;
+    let mut total_bytes: u64 = 0;
+    let mut top_exe: Option<PathBuf> = None;
+    let mut any_exe: Option<PathBuf> = None;
+    let mut stack = vec![dir.clone()];
+    let mut visited: u64 = 0;
+    while let Some(d) = stack.pop() {
+        visited += 1;
+        if visited > 2_000_000 {
+            break;
+        }
+        let rd =
+            std::fs::read_dir(&d).with_context(|| format!("Failed to list {}", d.display()))?;
+        for entry in rd {
+            let entry = entry?;
+            let ft = entry.file_type()?;
+            if ft.is_symlink() {
+                continue;
+            }
+            let p = entry.path();
+            if ft.is_dir() {
+                dirs += 1;
+                stack.push(p);
+            } else if ft.is_file() {
+                files += 1;
+                total_bytes += entry.metadata().map(|m| m.len()).unwrap_or(0);
+                let is_exe = p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                    n.eq_ignore_ascii_case("default.xex") || n.eq_ignore_ascii_case("default.xbe")
+                });
+                if is_exe {
+                    if p.parent() == Some(dir.as_path()) {
+                        top_exe = Some(p);
+                    } else if any_exe.is_none() {
+                        any_exe = Some(p);
+                    }
+                }
+            }
+        }
+    }
+    let exe_path = top_exe.or(any_exe);
+    let executable = exe_path
+        .as_ref()
+        .and_then(|p| p.strip_prefix(dir).ok().map(|r| r.display().to_string()));
+    let mut xex_exec = None;
+    let mut xbe_info = None;
+    if let Some(p) = &exe_path {
+        let file = File::open(p)?;
+        let size = file.metadata()?.len();
+        let mut reader = BufReader::new(file);
+        let mut magic = [0u8; 4];
+        if reader.read_exact(&mut magic).is_ok() {
+            if &magic == b"XEX2" {
+                if let Ok(win) = read_window(&mut reader, 0, 0x40000, size) {
+                    xex_exec = parse_xex_exec_info(&win, 0);
+                }
+            } else if &magic == b"XBEH" {
+                if let Ok(win) = read_window(&mut reader, 0, 0x400, size) {
+                    xbe_info = parse_xbe_info(&win);
+                }
+            }
+        }
+    }
+    Ok(GameDirInfo {
+        dir_path: dir.display().to_string(),
+        files,
+        dirs,
+        total_bytes,
+        executable,
+        xex_exec,
+        xbe_info,
+    })
 }
 
 pub struct TuParser {
@@ -349,9 +836,18 @@ impl TuParser {
         entries: &mut Vec<DirectoryEntry>,
         raw_strings: &mut Vec<(u64, String)>,
     ) -> Result<()> {
-        self.reader.seek(SeekFrom::Start(0))?;
-        let mut buffer = vec![0u8; self.file_size as usize];
-        self.reader.read_exact(&mut buffer)?;
+        // Only the header + file-table region is ever needed here (table
+        // slots, fixed strings). Never load the whole container: TUs/XBLA
+        // images can be hundreds of MB while this region tops out at a few
+        // hundred KB. Cap the table scan at 4096 slots as a sanity bound.
+        const TABLE_START: usize = 0xC000;
+        const MAX_SLOTS: usize = 4096;
+        let scan_end = (TABLE_START + MAX_SLOTS * 64).min(self.file_size as usize);
+        let buffer = if scan_end > 0 {
+            read_at(&mut self.reader, 0, scan_end)?
+        } else {
+            Vec::new()
+        };
 
         const DEFAULT_XEX_OFFSET: usize = 0xC000;
         const DEFAULT_DIR_OFFSET: usize = 0xC040;
@@ -488,10 +984,10 @@ fn parse_directory_entry(data: &[u8], offset: u64) -> Option<DirectoryEntry> {
 #[command(
     name = "tu_parser",
     version,
-    about = "Xbox 360 Title Update file parser"
+    about = "Xbox 360 container and image parser (STFS, XISO, XEX, GoD)"
 )]
 struct Args {
-    #[arg(required_unless_present = "dir")]
+    #[arg()]
     files: Vec<PathBuf>,
 
     #[arg(long, conflicts_with = "files")]
@@ -499,6 +995,9 @@ struct Args {
 
     #[arg(long, requires = "dir")]
     recursive: bool,
+
+    #[arg(long, conflicts_with_all = ["files", "dir"])]
+    game_dir: Option<PathBuf>,
 
     #[arg(short, long, default_value = "text")]
     format: OutputFormat,
@@ -553,6 +1052,21 @@ fn collect_files(
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Extracted game directory mode.
+    if let Some(game_dir) = &args.game_dir {
+        let info = parse_game_dir(game_dir)?;
+        return emit(
+            &args,
+            &[Report::GameDir(info)],
+            args.show_entries,
+            args.show_strings,
+        );
+    }
+
+    if args.files.is_empty() && args.dir.is_none() {
+        anyhow::bail!("no input: pass FILES, --dir <DIR> or --game-dir <DIR>");
+    }
+
     let file_paths = collect_files(&args.files, args.dir.as_ref(), args.recursive)?;
 
     if file_paths.is_empty() {
@@ -560,139 +1074,246 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Sweep tolerance: unrecognized files warn and continue instead of
+    // aborting the run (e.g. GOD DataNNNN parts in a directory walk).
     let mut all_results = Vec::new();
+    let mut failures: u64 = 0;
     for file_path in &file_paths {
         if args.verbose {
             eprintln!("Parsing: {}", file_path.display());
         }
-        let mut parser = TuParser::open(file_path)?;
-        let mut info = parser.parse()?;
-        info.file_path = file_path.display().to_string();
-        if args.verbose {
-            eprintln!("  File size: {} bytes", info.file_size);
-            eprintln!("  Kind: {}", info.content_kind);
-            eprintln!("  Media ID: {}", info.media_id);
-            eprintln!("  Base title ID: {}", info.base_title_id);
-            eprintln!("  Title: {}", info.display_title);
-            eprintln!(
-                "  Region mask: {}",
+        match parse_file(file_path) {
+            Ok(report) => {
+                if args.verbose {
+                    eprintln!("  -> {}", report_summary(&report));
+                }
+                all_results.push(report);
+            }
+            Err(e) => {
+                failures += 1;
+                eprintln!("warning: skipping {}: {:#}", file_path.display(), e);
+            }
+        }
+    }
+    if all_results.is_empty() {
+        anyhow::bail!("no files parsed successfully ({failures} failed)");
+    }
+    if failures > 0 {
+        eprintln!("{failures} file(s) skipped");
+    }
+
+    emit(&args, &all_results, args.show_entries, args.show_strings)
+}
+
+fn report_summary(report: &Report) -> String {
+    match report {
+        Report::Stfs(i) => format!("{} {}", i.content_kind, i.display_title),
+        Report::Xiso(i) => format!("XISO {} ({} entries)", i.iso_type, i.entries.len()),
+        Report::Xex(i) => format!("XEX {}", i.exec.title_id),
+        Report::Xbe(i) => format!("XBE {}", i.info.title_id),
+        Report::GameDir(i) => format!("game dir ({} files)", i.files),
+    }
+}
+
+fn xex_line(xex: &XexExecInfo) -> String {
+    format!(
+        "XEX: media {} version {} (base {}) title {} platform {} type {} disc {}/{}\n",
+        xex.media_id,
+        xex.version,
+        xex.base_version,
+        xex.title_id,
+        xex.platform,
+        xex.executable_type,
+        xex.disc_number,
+        xex.disc_count
+    )
+}
+
+fn render_report(report: &Report, show_entries: bool, show_strings: bool) -> String {
+    let mut out = String::new();
+    match report {
+        Report::Stfs(info) => {
+            out.push_str(&format!("=== {} ===\n", info.file_path));
+            out.push_str(&format!("File size: {}\n", format_size(info.file_size)));
+            out.push_str(&format!("Container: {}\n", info.container_magic));
+            out.push_str(&format!(
+                "LIVE container: {}\n",
+                if info.is_live { "YES" } else { "NO" }
+            ));
+            out.push_str(&format!(
+                "Title Update: {}\n",
+                if info.is_title_update { "YES" } else { "NO" }
+            ));
+            out.push_str(&format!("Kind: {}\n", info.content_kind));
+            out.push_str(&format!("Media ID: {}\n", info.media_id));
+            out.push_str(&format!("Base title ID: {}\n", info.base_title_id));
+            out.push_str(&format!("Content type: {}\n", info.content_type));
+            out.push_str(&format!("Title: {}\n", info.display_title));
+            out.push_str(&format!(
+                "Region mask: {}\n",
                 info.region_mask.as_deref().unwrap_or("n/a")
-            );
-            eprintln!(
-                "  Regions: {}",
+            ));
+            out.push_str(&format!(
+                "Regions: {}\n",
                 if info.regions.is_empty() {
                     "n/a".to_string()
                 } else {
                     info.regions.join(" ")
                 }
+            ));
+            if !info.regions_detailed.is_empty() {
+                out.push_str(&format!(
+                    "Regions (detailed): {}\n",
+                    info.regions_detailed.join(" ")
+                ));
+            }
+            if let Some(xex) = &info.xex_exec {
+                out.push_str(&xex_line(xex));
+            }
+            render_entries(
+                &mut out,
+                &info
+                    .directory_entries
+                    .iter()
+                    .map(|e| (e.filename.as_str(), e.offset, e.size, e.is_dir))
+                    .collect::<Vec<_>>(),
+                show_entries,
             );
+            if show_strings {
+                out.push_str(&format!(
+                    "\nRaw strings found ({}):\n",
+                    info.raw_strings.len()
+                ));
+                for (offset, s) in &info.raw_strings {
+                    out.push_str(&format!("  0x{:08X}: {}\n", offset, s));
+                }
+            }
+            out.push('\n');
         }
-        all_results.push(info);
+        Report::Xiso(info) => {
+            out.push_str(&format!("=== {} ===\n", info.file_path));
+            out.push_str(&format!("File size: {}\n", format_size(info.file_size)));
+            out.push_str(&format!("Format: XISO ({})\n", info.iso_type));
+            out.push_str(&format!(
+                "Root table: sector {} ({} bytes)\n",
+                info.root_sector, info.root_size
+            ));
+            out.push_str(&format!("Volume sectors: {}\n", info.volume_sectors));
+            match &info.executable {
+                Some(e) => out.push_str(&format!("Executable: {}\n", e)),
+                None => out.push_str("Executable: not found\n"),
+            }
+            if let Some(xex) = &info.xex_exec {
+                out.push_str(&xex_line(xex));
+            }
+            if let Some(xbe) = &info.xbe_info {
+                out.push_str(&format!(
+                    "XBE: title {} version {}\n",
+                    xbe.title_id, xbe.version
+                ));
+            }
+            render_entries(
+                &mut out,
+                &info
+                    .entries
+                    .iter()
+                    .map(|e| (e.path.as_str(), e.sector as u64, e.size, e.is_dir))
+                    .collect::<Vec<_>>(),
+                show_entries,
+            );
+            out.push('\n');
+        }
+        Report::Xex(info) => {
+            out.push_str(&format!("=== {} ===\n", info.file_path));
+            out.push_str(&format!("File size: {}\n", format_size(info.file_size)));
+            out.push_str("Format: XEX executable\n");
+            out.push_str(&xex_line(&info.exec));
+            out.push('\n');
+        }
+        Report::Xbe(info) => {
+            out.push_str(&format!("=== {} ===\n", info.file_path));
+            out.push_str(&format!("File size: {}\n", format_size(info.file_size)));
+            out.push_str("Format: XBE executable (original Xbox)\n");
+            out.push_str(&format!(
+                "XBE: title {} version {}\n",
+                info.info.title_id, info.info.version
+            ));
+            out.push('\n');
+        }
+        Report::GameDir(info) => {
+            out.push_str(&format!("=== {} ===\n", info.dir_path));
+            out.push_str("Format: extracted game directory\n");
+            out.push_str(&format!(
+                "Files: {}  Dirs: {}  Total: {}\n",
+                info.files,
+                info.dirs,
+                format_size(info.total_bytes)
+            ));
+            match &info.executable {
+                Some(e) => out.push_str(&format!("Executable: {}\n", e)),
+                None => out.push_str("Executable: default.xex/.xbe not found\n"),
+            }
+            if let Some(xex) = &info.xex_exec {
+                out.push_str(&xex_line(xex));
+            }
+            if let Some(xbe) = &info.xbe_info {
+                out.push_str(&format!(
+                    "XBE: title {} version {}\n",
+                    xbe.title_id, xbe.version
+                ));
+            }
+            out.push('\n');
+        }
     }
+    out
+}
 
+fn render_entries(out: &mut String, entries: &[(&str, u64, u64, bool)], show_all: bool) {
+    // entries: (name, offset-or-sector, size, is_dir). STFS passes table
+    // offsets, XISO passes sector numbers; both print as hex.
+    if show_all || entries.len() <= 50 {
+        out.push_str(&format!("\nDirectory entries ({}):\n", entries.len()));
+        for (i, (name, at, size, is_dir)) in entries.iter().enumerate() {
+            out.push_str(&format!(
+                "  [{}] {} | Offset: 0x{:X} | Size: {}{}\n",
+                i,
+                name,
+                at,
+                format_size(*size),
+                if *is_dir { " (dir)" } else { "" }
+            ));
+        }
+    } else {
+        out.push_str(&format!(
+            "\nDirectory entries ({}): [use --show-entries to list all]\n",
+            entries.len()
+        ));
+        for (i, (name, at, size, is_dir)) in entries.iter().take(10).enumerate() {
+            out.push_str(&format!(
+                "  [{}] {} | Offset: 0x{:X} | Size: {}{}\n",
+                i,
+                name,
+                at,
+                format_size(*size),
+                if *is_dir { " (dir)" } else { "" }
+            ));
+        }
+        out.push_str(&format!("  ... and {} more\n", entries.len() - 10));
+    }
+}
+
+fn emit(args: &Args, reports: &[Report], show_entries: bool, show_strings: bool) -> Result<()> {
     let output = match args.format {
-        OutputFormat::Json => serde_json::to_string_pretty(&all_results)?,
+        OutputFormat::Json => serde_json::to_string_pretty(&reports)?,
         OutputFormat::Text => {
             let mut out = String::new();
-            for info in &all_results {
-                out.push_str(&format!("=== {} ===\n", info.file_path));
-                out.push_str(&format!("File size: {}\n", format_size(info.file_size)));
-                out.push_str(&format!("Container: {}\n", info.container_magic));
-                out.push_str(&format!(
-                    "LIVE container: {}\n",
-                    if info.is_live { "YES" } else { "NO" }
-                ));
-                out.push_str(&format!(
-                    "Title Update: {}\n",
-                    if info.is_title_update { "YES" } else { "NO" }
-                ));
-                out.push_str(&format!("Kind: {}\n", info.content_kind));
-                out.push_str(&format!("Media ID: {}\n", info.media_id));
-                out.push_str(&format!("Base title ID: {}\n", info.base_title_id));
-                out.push_str(&format!("Content type: {}\n", info.content_type));
-                out.push_str(&format!("Title: {}\n", info.display_title));
-                out.push_str(&format!(
-                    "Region mask: {}\n",
-                    info.region_mask.as_deref().unwrap_or("n/a")
-                ));
-                out.push_str(&format!(
-                    "Regions: {}\n",
-                    if info.regions.is_empty() {
-                        "n/a".to_string()
-                    } else {
-                        info.regions.join(" ")
-                    }
-                ));
-                if !info.regions_detailed.is_empty() {
-                    out.push_str(&format!(
-                        "Regions (detailed): {}\n",
-                        info.regions_detailed.join(" ")
-                    ));
-                }
-                if let Some(xex) = &info.xex_exec {
-                    out.push_str(&format!(
-                        "XEX: media {} version {} (base {}) title {} platform {} type {} disc {}/{}\n",
-                        xex.media_id,
-                        xex.version,
-                        xex.base_version,
-                        xex.title_id,
-                        xex.platform,
-                        xex.executable_type,
-                        xex.disc_number,
-                        xex.disc_count
-                    ));
-                }
-                if args.show_entries || info.directory_entries.len() <= 50 {
-                    out.push_str(&format!(
-                        "\nDirectory entries ({}):\n",
-                        info.directory_entries.len()
-                    ));
-                    for (i, entry) in info.directory_entries.iter().enumerate() {
-                        out.push_str(&format!(
-                            "  [{}] {} | Offset: 0x{:X} | Size: {}{}\n",
-                            i,
-                            entry.filename,
-                            entry.offset,
-                            format_size(entry.size),
-                            if entry.is_dir { " (dir)" } else { "" }
-                        ));
-                    }
-                } else {
-                    out.push_str(&format!(
-                        "\nDirectory entries ({}): [use --show-entries to list all]\n",
-                        info.directory_entries.len()
-                    ));
-                    for (i, entry) in info.directory_entries.iter().take(10).enumerate() {
-                        out.push_str(&format!(
-                            "  [{}] {} | Offset: 0x{:X} | Size: {}{}\n",
-                            i,
-                            entry.filename,
-                            entry.offset,
-                            format_size(entry.size),
-                            if entry.is_dir { " (dir)" } else { "" }
-                        ));
-                    }
-                    out.push_str(&format!(
-                        "  ... and {} more\n",
-                        info.directory_entries.len() - 10
-                    ));
-                }
-                if args.show_strings {
-                    out.push_str(&format!(
-                        "\nRaw strings found ({}):\n",
-                        info.raw_strings.len()
-                    ));
-                    for (offset, s) in &info.raw_strings {
-                        out.push_str(&format!("  0x{:08X}: {}\n", offset, s));
-                    }
-                }
-                out.push('\n');
+            for report in reports {
+                out.push_str(&render_report(report, show_entries, show_strings));
             }
             out
         }
     };
-
-    if let Some(output_path) = args.output {
+    if let Some(output_path) = &args.output {
         std::fs::write(output_path, output)?;
     } else {
         print!("{}", output);
@@ -848,5 +1469,103 @@ mod tests {
         assert_eq!(info.directory_entries.len(), 1);
         assert_eq!(info.directory_entries[0].filename, "DSDLKey.bin");
         assert_eq!(info.directory_entries[0].size, 21);
+    }
+
+    /// Build a minimal XSF image: volume descriptor at sector 0x20, one
+    /// file entry in the root table (mirrors iso2god's unit-test layout).
+    fn write_synthetic_xsf(path: &std::path::Path) {
+        let mut img = vec![0u8; 64 * 0x800];
+        let desc = 0x20 * 0x800;
+        img[desc..desc + 20].copy_from_slice(b"MICROSOFT*XBOX*MEDIA");
+        img[desc + 20..desc + 24].copy_from_slice(&40u32.to_le_bytes());
+        img[desc + 24..desc + 28].copy_from_slice(&0x800u32.to_le_bytes());
+        let table = 40 * 0x800;
+        img[table..table + 2].copy_from_slice(&0u16.to_le_bytes());
+        img[table + 2..table + 4].copy_from_slice(&0u16.to_le_bytes());
+        img[table + 4..table + 8].copy_from_slice(&50u32.to_le_bytes());
+        img[table + 8..table + 12].copy_from_slice(&100u32.to_le_bytes());
+        img[table + 12] = 0x20;
+        img[table + 13] = 1;
+        img[table + 14] = b'a';
+        std::fs::write(path, &img).unwrap();
+    }
+
+    #[test]
+    fn xiso_synthetic_parses() {
+        let path = std::env::temp_dir().join(format!("tu_parser_xsf_{}.iso", std::process::id()));
+        write_synthetic_xsf(&path);
+        let size = std::fs::metadata(&path).unwrap().len();
+        let report = parse_file(&path).expect("synthetic xsf parses");
+        std::fs::remove_file(&path).ok();
+        match report {
+            Report::Xiso(info) => {
+                assert_eq!(info.iso_type, "XSF");
+                assert_eq!(info.file_size, size);
+                assert_eq!(info.entries.len(), 1);
+                assert_eq!(info.entries[0].path, "a");
+                assert_eq!(info.entries[0].sector, 50);
+                assert_eq!(info.entries[0].size, 100);
+                assert!(!info.entries[0].is_dir);
+                assert_eq!(info.executable, None);
+            }
+            _ => panic!("expected xiso"),
+        }
+    }
+
+    #[test]
+    fn xbe_synthetic_parses() {
+        let path = std::env::temp_dir().join(format!("tu_parser_xbe_{}.xbe", std::process::id()));
+        let mut buf = vec![0u8; 0x400];
+        buf[0..4].copy_from_slice(b"XBEH");
+        buf[8..12].copy_from_slice(&0x4D53084Du32.to_le_bytes());
+        buf[176..180].copy_from_slice(&0x00000002u32.to_le_bytes());
+        std::fs::write(&path, &buf).unwrap();
+        let report = parse_file(&path).expect("synthetic xbe parses");
+        std::fs::remove_file(&path).ok();
+        match report {
+            Report::Xbe(info) => {
+                assert_eq!(info.info.title_id, "4D53084D");
+                assert_eq!(info.info.version, "00000002");
+            }
+            _ => panic!("expected xbe"),
+        }
+    }
+
+    #[test]
+    fn unknown_file_rejected() {
+        let path = std::env::temp_dir().join(format!("tu_parser_unk_{}.bin", std::process::id()));
+        std::fs::write(&path, b"definitely not an xbox file................").unwrap();
+        let err = parse_file(&path).expect_err("unknown file rejected");
+        std::fs::remove_file(&path).ok();
+        assert!(matches!(
+            err.downcast_ref::<TuError>(),
+            Some(TuError::UnknownFormat)
+        ));
+    }
+
+    #[test]
+    fn game_dir_parses_default_xex() {
+        let dir = std::env::temp_dir().join(format!("tu_parser_gdir_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // Minimal XEX2 with ExecutionId.
+        let mut xex = vec![0u8; 0x100];
+        xex[0..4].copy_from_slice(b"XEX2");
+        xex[20..24].copy_from_slice(&1u32.to_be_bytes());
+        xex[24..28].copy_from_slice(&0x00040006u32.to_be_bytes());
+        xex[28..32].copy_from_slice(&0x40u32.to_be_bytes());
+        xex[0x40..0x44].copy_from_slice(&0x36D691EEu32.to_be_bytes());
+        xex[0x44..0x48].copy_from_slice(&0x00000103u32.to_be_bytes());
+        xex[0x48..0x4C].copy_from_slice(&0x00000103u32.to_be_bytes());
+        xex[0x4C..0x50].copy_from_slice(&0x58410886u32.to_be_bytes());
+        std::fs::write(dir.join("default.xex"), &xex).unwrap();
+        std::fs::write(dir.join("readme.txt"), b"hello").unwrap();
+        let info = parse_game_dir(&dir).expect("game dir parses");
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(info.files, 2);
+        assert_eq!(info.total_bytes, 0x100 + 5);
+        assert_eq!(info.executable.as_deref(), Some("default.xex"));
+        let exec = info.xex_exec.expect("exec parsed");
+        assert_eq!(exec.title_id, "58410886");
+        assert!(info.xbe_info.is_none());
     }
 }
