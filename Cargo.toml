@@ -1,0 +1,18 @@
+[package]
+name = "tu_parser"
+version = "0.1.0"
+edition = "2021"
+description = "CLI parser for Xbox 360 Title Update (TU) files in LIVE/STFS containers"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+byteorder = "1.5"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+
+[profile.release]
+lto = true
+codegen-units = 1
