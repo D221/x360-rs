@@ -1,5 +1,7 @@
 # tu_parser
 
+[![CI](https://github.com/D221/tu_parser/actions/workflows/ci.yml/badge.svg)](https://github.com/D221/tu_parser/actions/workflows/ci.yml)
+
 A small command-line tool that reads Xbox 360 **Title Update (TU)** files
 (`TU_*`, `tu*`) stored in `LIVE`/STFS containers and prints what they contain:
 game title, media ID, region mask/regions, and the file listing with sizes.
@@ -28,6 +30,9 @@ Requires a Rust toolchain ([rustup](https://rustup.rs/)):
 cargo build --release
 # binary: target/release/tu_parser(.exe)
 ```
+
+Prebuilt Windows and Linux binaries are attached to each
+[release](https://github.com/D221/tu_parser/releases).
 
 ## Usage
 
