@@ -1043,6 +1043,7 @@ fn extract_mmap_with_progress<F>(
 where
     F: Fn(String) + Send + Sync + 'static,
 {
+    use std::os::unix::io::AsRawFd;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Instant;
 
