@@ -1272,7 +1272,8 @@ fn extract_parallel(
     })
 }
 
-/// Progress-enabled parallel extraction
+/// Progress-enabled parallel extraction (Windows only)
+#[cfg(windows)]
 fn extract_parallel_with_progress<F>(
     iso_path: &std::path::Path,
     root_offset: u64,
