@@ -565,7 +565,10 @@ mod tests {
     #[test]
     fn regions_collapse_pal() {
         let detailed = decode_regions(0x00FF00FF);
-        assert_eq!(collapse_regions(&detailed), vec!["PAL".to_string(), "NTSC/U".to_string()]);
+        assert_eq!(
+            collapse_regions(&detailed),
+            vec!["PAL".to_string(), "NTSC/U".to_string()]
+        );
     }
 
     #[test]
