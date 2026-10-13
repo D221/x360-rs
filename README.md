@@ -10,7 +10,8 @@ game title, media ID, region mask/regions (TU only), XEX execution info
 (full game XEXs), and the file listing with sizes.
 
 No GUI, no dependencies on the original tools — everything is parsed
-directly from the TU file itself.
+directly from the TU file itself. Accepts all three STFS container magics:
+`LIVE`, `CON `, and `PIRS` (identical header/table layout).
 
 ## Features
 

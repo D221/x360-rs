@@ -10,10 +10,26 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum TuError {
-    #[error("Not a valid LIVE container: expected 'LIVE' magic, got {0:08X}")]
+    #[error("Not a valid STFS container: expected 'LIVE', 'CON ' or 'PIRS' magic, got {0:08X}")]
     InvalidMagic(u32),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// Accepted STFS container magics (LE u32): "LIVE", "CON ", "PIRS".
+/// Same header/table layout regardless of magic.
+pub const MAGIC_LIVE: u32 = 0x4556494C;
+pub const MAGIC_CON: u32 = 0x204E4F43;
+pub const MAGIC_PIRS: u32 = 0x53524950;
+
+/// Display name for a container magic.
+pub fn magic_name(magic: u32) -> &'static str {
+    match magic {
+        MAGIC_LIVE => "LIVE",
+        MAGIC_CON => "CON",
+        MAGIC_PIRS => "PIRS",
+        _ => "Unknown",
+    }
 }
 
 /// STFS content types (BE u32 at 0x0344).
@@ -167,7 +183,7 @@ impl TuHeader {
     pub fn read(reader: &mut (impl Read + Seek), file_size: u64) -> Result<Self> {
         reader.seek(SeekFrom::Start(0))?;
         let magic = reader.read_u32::<LittleEndian>()?;
-        if magic != 0x4556494C {
+        if magic != MAGIC_LIVE && magic != MAGIC_CON && magic != MAGIC_PIRS {
             return Err(TuError::InvalidMagic(magic).into());
         }
 
@@ -263,6 +279,7 @@ pub struct TuInfo {
     pub file_size: u64,
     pub is_live: bool,
     pub is_title_update: bool,
+    pub container_magic: String,
     pub content_kind: String,
     pub media_id: String,
     pub base_title_id: String,
@@ -310,8 +327,9 @@ impl TuParser {
         Ok(TuInfo {
             file_path: String::new(),
             file_size: self.file_size,
-            is_live: true,
+            is_live: header.magic == MAGIC_LIVE,
             is_title_update,
+            container_magic: magic_name(header.magic).to_string(),
             content_kind: content_type_name(header.content_type).to_string(),
             media_id: format!("{:08X}", header.media_id),
             base_title_id: format!("{:08X}", header.base_title_id),
@@ -579,6 +597,7 @@ fn main() -> Result<()> {
             for info in &all_results {
                 out.push_str(&format!("=== {} ===\n", info.file_path));
                 out.push_str(&format!("File size: {}\n", format_size(info.file_size)));
+                out.push_str(&format!("Container: {}\n", info.container_magic));
                 out.push_str(&format!(
                     "LIVE container: {}\n",
                     if info.is_live { "YES" } else { "NO" }
@@ -746,6 +765,17 @@ mod tests {
         let parsed = parse_directory_entry(&entry, 0xC080).expect("dir parses");
         assert!(parsed.is_dir);
         assert_eq!(parsed.size, 0);
+    }
+
+    #[test]
+    fn container_magics() {
+        assert_eq!(magic_name(MAGIC_LIVE), "LIVE");
+        assert_eq!(magic_name(MAGIC_CON), "CON");
+        assert_eq!(magic_name(MAGIC_PIRS), "PIRS");
+        assert_eq!(magic_name(0xDEADBEEF), "Unknown");
+        assert_eq!(MAGIC_LIVE, 0x4556494C);
+        assert_eq!(MAGIC_CON, u32::from_le_bytes(*b"CON "));
+        assert_eq!(MAGIC_PIRS, u32::from_le_bytes(*b"PIRS"));
     }
 
     #[test]
