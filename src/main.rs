@@ -19,14 +19,81 @@ pub enum TuError {
 /// STFS content types (BE u32 at 0x0344).
 pub const CONTENT_TITLE_UPDATE: u32 = 0x000B0000;
 pub const CONTENT_MARKETPLACE: u32 = 0x00000002;
+pub const CONTENT_XBLA: u32 = 0x000D0000;
+pub const CONTENT_AVATAR: u32 = 0x00009000;
+pub const CONTENT_THEME: u32 = 0x00030000;
 
 /// Human-readable content-type name.
 pub fn content_type_name(content_type: u32) -> &'static str {
     match content_type {
         CONTENT_TITLE_UPDATE => "Title Update",
         CONTENT_MARKETPLACE => "Marketplace Content (DLC)",
+        CONTENT_XBLA => "Xbox Live Arcade (XBLA)",
+        CONTENT_AVATAR => "Avatar Item",
+        CONTENT_THEME => "Theme",
         _ => "Unknown",
     }
+}
+
+/// Execution info from a full game XEX header (ExecutionId field
+/// 0x00040006), per iso2god-rs `src/executable/xex.rs`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XexExecInfo {
+    pub media_id: String,
+    pub version: String,
+    pub base_version: String,
+    pub title_id: String,
+    pub platform: u8,
+    pub executable_type: u8,
+    pub disc_number: u8,
+    pub disc_count: u8,
+}
+
+/// Parse the XEX header at `xex_offset` in `buf`, returning the ExecutionId
+/// info when the header carries field 0x00040006. TU patch XEXs only have
+/// 2 fields and no ExecutionId; full game XEXs (XBLA etc.) do.
+pub fn parse_xex_exec_info(buf: &[u8], xex_offset: usize) -> Option<XexExecInfo> {
+    let need = xex_offset.checked_add(24)?;
+    if need > buf.len() || &buf[xex_offset..xex_offset + 4] != b"XEX2" {
+        return None;
+    }
+    let field_count = u32::from_be_bytes([
+        buf[xex_offset + 20],
+        buf[xex_offset + 21],
+        buf[xex_offset + 22],
+        buf[xex_offset + 23],
+    ]) as usize;
+    if field_count > 256 {
+        return None;
+    }
+    for i in 0..field_count {
+        let base = xex_offset.checked_add(24 + i * 8)?;
+        if base + 8 > buf.len() {
+            return None;
+        }
+        let key = u32::from_be_bytes([buf[base], buf[base + 1], buf[base + 2], buf[base + 3]]);
+        let val = u32::from_be_bytes([buf[base + 4], buf[base + 5], buf[base + 6], buf[base + 7]]);
+        if key == 0x00040006 {
+            let e = xex_offset.checked_add(val as usize)?;
+            if e + 20 > buf.len() {
+                return None;
+            }
+            let be = |o: usize| {
+                u32::from_be_bytes([buf[e + o], buf[e + o + 1], buf[e + o + 2], buf[e + o + 3]])
+            };
+            return Some(XexExecInfo {
+                media_id: format!("{:08X}", be(0)),
+                version: format!("{:08X}", be(4)),
+                base_version: format!("{:08X}", be(8)),
+                title_id: format!("{:08X}", be(12)),
+                platform: buf[e + 16],
+                executable_type: buf[e + 17],
+                disc_number: buf[e + 18],
+                disc_count: buf[e + 19],
+            });
+        }
+    }
+    None
 }
 
 // Region bitmask mapping, confirmed via REA/Ghidra against
@@ -85,14 +152,15 @@ pub fn collapse_regions(detailed: &[String]) -> Vec<String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuHeader {
-    pub magic: u32,                // 0x0000: "LIVE" (LE u32 0x4556494C)
+    pub magic: u32,                    // 0x0000: "LIVE" (LE u32 0x4556494C)
     pub tu_signature: Option<u32>, // 0x971A: "TUPD" (LE u32 0x44505554), present in title updates
-    pub content_type: u32, // 0x0344: BE u32, 0x000B0000 = TU, 0x00000002 = DLC (per iso2god con_header.rs)
-    pub media_id: u32,     // 0x0354: BE u32, media ID (0 for DLC)
+    pub content_type: u32,         // 0x0344: BE u32 (per iso2god con_header.rs)
+    pub media_id: u32,             // 0x0354: BE u32, media ID (0 for DLC)
     pub base_title_id: u32, // 0x0360: BE u32, base game title ID (per iso2god with_execution_info)
     pub display_title: String, // 0x0411: UTF-16BE string (per iso2god with_game_title)
     pub xex_offset: Option<u64>, // file offset of embedded "XEX2", if any
-    pub region_mask: Option<u32>, // BE u32 at xex_offset + 0x1A0 (TU only; DLC has no XEX)
+    pub region_mask: Option<u32>, // BE u32 at xex_offset + 0x1A0 (TU patch XEX only)
+    pub xex_exec: Option<XexExecInfo>, // ExecutionId from full game XEX (XBLA etc.)
 }
 
 impl TuHeader {
@@ -138,25 +206,34 @@ impl TuHeader {
         }
         let display_title = String::from_utf16_lossy(&title_units);
 
-        // Locate embedded XEX2 (TU only; DLC has none) and read the
-        // region mask at xex_offset + 0x1A0.
+        // Locate embedded XEX2. Only TU *patch* XEXs carry the region
+        // mask at xex_offset + 0x1A0 — full game XEXs (XBLA etc.) have a
+        // real header there instead, so only read the mask for title updates.
+        // Full game XEXs do carry ExecutionId (field 0x00040006) with
+        // media/version/title IDs (iso2god-rs src/executable/xex.rs).
         reader.seek(SeekFrom::Start(0))?;
         let mut buf = vec![0u8; file_size as usize];
         reader.read_exact(&mut buf)?;
         let xex_offset = buf.windows(4).position(|w| w == b"XEX2").map(|p| p as u64);
-        let region_mask = xex_offset.and_then(|x| {
-            let roff = x as usize + 0x1A0;
-            if roff + 4 <= buf.len() {
-                Some(u32::from_be_bytes([
-                    buf[roff],
-                    buf[roff + 1],
-                    buf[roff + 2],
-                    buf[roff + 3],
-                ]))
-            } else {
-                None
-            }
-        });
+        let is_tu = content_type == CONTENT_TITLE_UPDATE;
+        let region_mask = if is_tu {
+            xex_offset.and_then(|x| {
+                let roff = x as usize + 0x1A0;
+                if roff + 4 <= buf.len() {
+                    Some(u32::from_be_bytes([
+                        buf[roff],
+                        buf[roff + 1],
+                        buf[roff + 2],
+                        buf[roff + 3],
+                    ]))
+                } else {
+                    None
+                }
+            })
+        } else {
+            None
+        };
+        let xex_exec = xex_offset.and_then(|x| parse_xex_exec_info(&buf, x as usize));
 
         Ok(TuHeader {
             magic,
@@ -167,6 +244,7 @@ impl TuHeader {
             display_title,
             xex_offset,
             region_mask,
+            xex_exec,
         })
     }
 }
@@ -193,6 +271,7 @@ pub struct TuInfo {
     pub region_mask: Option<String>,
     pub regions_detailed: Vec<String>,
     pub regions: Vec<String>,
+    pub xex_exec: Option<XexExecInfo>,
     pub directory_entries: Vec<DirectoryEntry>,
     pub raw_strings: Vec<(u64, String)>,
 }
@@ -226,7 +305,7 @@ impl TuParser {
 
         let mut entries = Vec::new();
         let mut raw_strings = Vec::new();
-        self.extract_strings_and_entries(header.xex_offset, &mut entries, &mut raw_strings)?;
+        self.extract_strings_and_entries(&mut entries, &mut raw_strings)?;
 
         Ok(TuInfo {
             file_path: String::new(),
@@ -241,6 +320,7 @@ impl TuParser {
             region_mask: header.region_mask.map(|m| format!("{:08X}", m)),
             regions_detailed: detailed,
             regions: collapsed,
+            xex_exec: header.xex_exec,
             directory_entries: entries,
             raw_strings,
         })
@@ -248,7 +328,6 @@ impl TuParser {
 
     fn extract_strings_and_entries(
         &mut self,
-        xex_offset: Option<u64>,
         entries: &mut Vec<DirectoryEntry>,
         raw_strings: &mut Vec<(u64, String)>,
     ) -> Result<()> {
@@ -297,17 +376,13 @@ impl TuParser {
         }
 
         // STFS file table: 64-byte entries starting at 0xC000. The table
-        // is densely packed: stop at the first all-zero slot. Upper bound
-        // is the embedded XEX data when present (slot at xex_offset is the
-        // "XEX2" magic, not an entry; bytes past it are file data), else EOF.
+        // is densely packed: stop at the first all-zero slot. (The slot
+        // holding the embedded "XEX2" magic and bytes past the table are
+        // file data, never reached thanks to the zero terminator.)
         let dir_start = 0xC000usize;
-        let dir_end = xex_offset
-            .map(|x| x as usize)
-            .unwrap_or(buffer.len())
-            .min(buffer.len());
         let entry_size = 64;
         let mut offset = dir_start;
-        while offset + entry_size <= dir_end {
+        while offset + entry_size <= buffer.len() {
             let entry_data = &buffer[offset..offset + entry_size];
             if entry_data.iter().all(|&b| b == 0) {
                 break;
@@ -535,6 +610,19 @@ fn main() -> Result<()> {
                         info.regions_detailed.join(" ")
                     ));
                 }
+                if let Some(xex) = &info.xex_exec {
+                    out.push_str(&format!(
+                        "XEX: media {} version {} (base {}) title {} platform {} type {} disc {}/{}\n",
+                        xex.media_id,
+                        xex.version,
+                        xex.base_version,
+                        xex.title_id,
+                        xex.platform,
+                        xex.executable_type,
+                        xex.disc_number,
+                        xex.disc_count
+                    ));
+                }
                 if args.show_entries || info.directory_entries.len() <= 50 {
                     out.push_str(&format!(
                         "\nDirectory entries ({}):\n",
@@ -664,6 +752,9 @@ mod tests {
     fn content_kinds() {
         assert_eq!(content_type_name(0x000B0000), "Title Update");
         assert_eq!(content_type_name(0x00000002), "Marketplace Content (DLC)");
+        assert_eq!(content_type_name(0x000D0000), "Xbox Live Arcade (XBLA)");
+        assert_eq!(content_type_name(0x00009000), "Avatar Item");
+        assert_eq!(content_type_name(0x00030000), "Theme");
         assert_eq!(content_type_name(0xDEADBEEF), "Unknown");
     }
 
@@ -683,6 +774,30 @@ mod tests {
         buf[0xC000 + 0x28] = 0x49;
         buf[0xC000 + 0x34..0xC000 + 0x38].copy_from_slice(&21u32.to_be_bytes());
         std::fs::write(path, &buf).unwrap();
+    }
+
+    #[test]
+    fn xex_exec_info_parses() {
+        // Synthetic XEX2 header with one ExecutionId field (0x00040006).
+        let mut buf = vec![0u8; 0x100];
+        buf[0..4].copy_from_slice(b"XEX2");
+        buf[20..24].copy_from_slice(&1u32.to_be_bytes());
+        buf[24..28].copy_from_slice(&0x00040006u32.to_be_bytes());
+        buf[28..32].copy_from_slice(&0x40u32.to_be_bytes());
+        buf[0x40..0x44].copy_from_slice(&0x36D691EEu32.to_be_bytes());
+        buf[0x44..0x48].copy_from_slice(&0x00000103u32.to_be_bytes());
+        buf[0x48..0x4C].copy_from_slice(&0x00000103u32.to_be_bytes());
+        buf[0x4C..0x50].copy_from_slice(&0x58410886u32.to_be_bytes());
+        let info = parse_xex_exec_info(&buf, 0).expect("exec parses");
+        assert_eq!(info.media_id, "36D691EE");
+        assert_eq!(info.version, "00000103");
+        assert_eq!(info.title_id, "58410886");
+
+        // TU patch XEX shape (no ExecutionId) yields None.
+        let mut buf = vec![0u8; 0x100];
+        buf[0..4].copy_from_slice(b"XEX2");
+        buf[20..24].copy_from_slice(&2u32.to_be_bytes());
+        assert!(parse_xex_exec_info(&buf, 0).is_none());
     }
 
     #[test]

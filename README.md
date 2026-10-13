@@ -2,11 +2,12 @@
 
 [![CI](https://github.com/D221/tu_parser/actions/workflows/ci.yml/badge.svg)](https://github.com/D221/tu_parser/actions/workflows/ci.yml)
 
-A small command-line tool that reads Xbox 360 **Title Update (TU)** and
-**DLC (Marketplace Content)** files (`TU_*`, `tu*`, content hashes) stored in
-`LIVE`/STFS containers and prints what they contain:
-game title, media ID, region mask/regions (TU only), and the file listing
-with sizes.
+A small command-line tool that reads Xbox 360 **Title Update (TU)**,
+**DLC / Marketplace**, **XBLA**, **avatar**, **theme**, and **indie** content
+(`TU_*`, `tu*`, content hashes) stored in `LIVE`/STFS containers and prints
+what they contain:
+game title, media ID, region mask/regions (TU only), XEX execution info
+(full game XEXs), and the file listing with sizes.
 
 No GUI, no dependencies on the original tools — everything is parsed
 directly from the TU file itself.
@@ -14,9 +15,12 @@ directly from the TU file itself.
 ## Features
 
 - Validates the `LIVE` container magic and (for title updates) the `TUPD`
-  signature; detects content kind (`Title Update` vs `Marketplace Content (DLC)`)
+  signature; detects content kind (`Title Update`, `Marketplace Content (DLC)`,
+  `Xbox Live Arcade (XBLA)`, `Avatar Item`, `Theme`)
 - Extracts the **media ID** (`0x354`), **base title ID** (`0x360`),
   and **display title** (UTF-16BE at `0x411`) from the STFS/CON header
+- Parses the embedded game XEX `ExecutionId` field (`0x00040006`, per
+  iso2god-rs `src/executable/xex.rs`) for media/version/title IDs
 - Extracts the **region mask** (big-endian u32 at embedded `XEX2` + `0x1A0`)
   and decodes it to region names using the same bit tests as the original
   Title Update Checker (`PAL(A)`, `PAL(E)`, `NTSC/J`, `NTSC/J(J)`,
