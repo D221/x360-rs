@@ -2,24 +2,28 @@
 
 [![CI](https://github.com/D221/tu_parser/actions/workflows/ci.yml/badge.svg)](https://github.com/D221/tu_parser/actions/workflows/ci.yml)
 
-A small command-line tool that reads Xbox 360 **Title Update (TU)** files
-(`TU_*`, `tu*`) stored in `LIVE`/STFS containers and prints what they contain:
-game title, media ID, region mask/regions, and the file listing with sizes.
+A small command-line tool that reads Xbox 360 **Title Update (TU)** and
+**DLC (Marketplace Content)** files (`TU_*`, `tu*`, content hashes) stored in
+`LIVE`/STFS containers and prints what they contain:
+game title, media ID, region mask/regions (TU only), and the file listing
+with sizes.
 
 No GUI, no dependencies on the original tools — everything is parsed
 directly from the TU file itself.
 
 ## Features
 
-- Validates the `LIVE` container magic and the `TUPD` title-update signature
+- Validates the `LIVE` container magic and (for title updates) the `TUPD`
+  signature; detects content kind (`Title Update` vs `Marketplace Content (DLC)`)
 - Extracts the **media ID** (`0x354`), **base title ID** (`0x360`),
   and **display title** (UTF-16BE at `0x411`) from the STFS/CON header
 - Extracts the **region mask** (big-endian u32 at embedded `XEX2` + `0x1A0`)
   and decodes it to region names using the same bit tests as the original
   Title Update Checker (`PAL(A)`, `PAL(E)`, `NTSC/J`, `NTSC/J(J)`,
   `NTSC/J(C)`, `NTSC/J(0)`, `NTSC/U`, `Region Free`)
-- Lists the STFS file table (64-byte entries at `0xC000`, bounded by the
-  embedded XEX): filename, table offset, and file size (BE u32 at entry+`0x34`)
+- Lists the STFS file table (64-byte entries at `0xC000`, densely packed —
+  scan stops at the first all-zero slot, bounded by the embedded XEX offset):
+  filename, table offset, file size (BE u32 at entry+`0x34`), directory flag
 - Text or JSON output, single files or whole directories (`--dir`, `--recursive`)
 
 ## Building
@@ -97,7 +101,7 @@ All offsets are file offsets into the TU container:
 | `0x0360` | 4 | Base game title ID, BE u32 |
 | `0x0411` | var | Display title, UTF-16BE, NUL-terminated |
 | `0x971A` | 4 | `TUPD` signature (LE u32 `0x44505554`) |
-| `0xC000` | `n × 64` | STFS file table (bounded by embedded XEX offset) |
+| `0xC000` | `n × 64` | STFS file table (dense; stops at first zero slot, bounded by XEX offset) |
 | `XEX2+0x1A0` | 4 | Region mask, BE u32 |
 
 STFS file-table entry (64 bytes):

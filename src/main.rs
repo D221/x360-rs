@@ -12,12 +12,21 @@ use thiserror::Error;
 pub enum TuError {
     #[error("Not a valid LIVE container: expected 'LIVE' magic, got {0:08X}")]
     InvalidMagic(u32),
-    #[error("Not a Title Update: expected 'TUPD' signature at 0x971A, got {0:08X}")]
-    InvalidSignature(u32),
-    #[error("XEX2 header not found in file")]
-    XexNotFound,
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+/// STFS content types (BE u32 at 0x0344).
+pub const CONTENT_TITLE_UPDATE: u32 = 0x000B0000;
+pub const CONTENT_MARKETPLACE: u32 = 0x00000002;
+
+/// Human-readable content-type name.
+pub fn content_type_name(content_type: u32) -> &'static str {
+    match content_type {
+        CONTENT_TITLE_UPDATE => "Title Update",
+        CONTENT_MARKETPLACE => "Marketplace Content (DLC)",
+        _ => "Unknown",
+    }
 }
 
 // Region bitmask mapping, confirmed via REA/Ghidra against
@@ -76,14 +85,14 @@ pub fn collapse_regions(detailed: &[String]) -> Vec<String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuHeader {
-    pub magic: u32,            // 0x0000: "LIVE" (LE u32 0x4556494C)
-    pub tu_signature: u32,     // 0x971A: "TUPD" (LE u32 0x44505554)
-    pub content_type: u32,     // 0x0344: BE u32, 0x000B0000 for TU (per iso2god con_header.rs)
-    pub media_id: u32, // 0x0354: BE u32, TU media ID (matches [ID] in Title_Update_List.txt)
+    pub magic: u32,                // 0x0000: "LIVE" (LE u32 0x4556494C)
+    pub tu_signature: Option<u32>, // 0x971A: "TUPD" (LE u32 0x44505554), present in title updates
+    pub content_type: u32, // 0x0344: BE u32, 0x000B0000 = TU, 0x00000002 = DLC (per iso2god con_header.rs)
+    pub media_id: u32,     // 0x0354: BE u32, media ID (0 for DLC)
     pub base_title_id: u32, // 0x0360: BE u32, base game title ID (per iso2god with_execution_info)
     pub display_title: String, // 0x0411: UTF-16BE string (per iso2god with_game_title)
-    pub xex_offset: u64, // file offset of embedded "XEX2"
-    pub region_mask: u32, // BE u32 at xex_offset + 0x1A0
+    pub xex_offset: Option<u64>, // file offset of embedded "XEX2", if any
+    pub region_mask: Option<u32>, // BE u32 at xex_offset + 0x1A0 (TU only; DLC has no XEX)
 }
 
 impl TuHeader {
@@ -94,11 +103,19 @@ impl TuHeader {
             return Err(TuError::InvalidMagic(magic).into());
         }
 
-        reader.seek(SeekFrom::Start(0x971A))?;
-        let tu_signature = reader.read_u32::<LittleEndian>()?;
-        if tu_signature != 0x44505554 {
-            return Err(TuError::InvalidSignature(tu_signature).into());
-        }
+        // TUPD signature only exists in title updates (and only if the
+        // file is large enough to contain offset 0x971A).
+        let tu_signature = if file_size >= 0x971E {
+            reader.seek(SeekFrom::Start(0x971A))?;
+            let sig = reader.read_u32::<LittleEndian>()?;
+            if sig == 0x44505554 {
+                Some(sig)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
         reader.seek(SeekFrom::Start(0x0344))?;
         let content_type = reader.read_u32::<BigEndian>()?;
@@ -121,20 +138,25 @@ impl TuHeader {
         }
         let display_title = String::from_utf16_lossy(&title_units);
 
-        // Locate embedded XEX2 and read region mask at xex_offset + 0x1A0
+        // Locate embedded XEX2 (TU only; DLC has none) and read the
+        // region mask at xex_offset + 0x1A0.
         reader.seek(SeekFrom::Start(0))?;
         let mut buf = vec![0u8; file_size as usize];
         reader.read_exact(&mut buf)?;
-        let xex_offset = buf
-            .windows(4)
-            .position(|w| w == b"XEX2")
-            .ok_or(TuError::XexNotFound)? as u64;
-        let roff = xex_offset as usize + 0x1A0;
-        if roff + 4 > buf.len() {
-            anyhow::bail!("region mask offset out of range");
-        }
-        let region_mask =
-            u32::from_be_bytes([buf[roff], buf[roff + 1], buf[roff + 2], buf[roff + 3]]);
+        let xex_offset = buf.windows(4).position(|w| w == b"XEX2").map(|p| p as u64);
+        let region_mask = xex_offset.and_then(|x| {
+            let roff = x as usize + 0x1A0;
+            if roff + 4 <= buf.len() {
+                Some(u32::from_be_bytes([
+                    buf[roff],
+                    buf[roff + 1],
+                    buf[roff + 2],
+                    buf[roff + 3],
+                ]))
+            } else {
+                None
+            }
+        });
 
         Ok(TuHeader {
             magic,
@@ -163,11 +185,12 @@ pub struct TuInfo {
     pub file_size: u64,
     pub is_live: bool,
     pub is_title_update: bool,
+    pub content_kind: String,
     pub media_id: String,
     pub base_title_id: String,
     pub content_type: String,
     pub display_title: String,
-    pub region_mask: String,
+    pub region_mask: Option<String>,
     pub regions_detailed: Vec<String>,
     pub regions: Vec<String>,
     pub directory_entries: Vec<DirectoryEntry>,
@@ -190,8 +213,16 @@ impl TuParser {
     pub fn parse(&mut self) -> Result<TuInfo> {
         let header = TuHeader::read(&mut self.reader, self.file_size)?;
 
-        let detailed = decode_regions(header.region_mask);
-        let collapsed = collapse_regions(&detailed);
+        let is_title_update =
+            header.content_type == CONTENT_TITLE_UPDATE && header.tu_signature == Some(0x44505554);
+        let (detailed, collapsed) = match header.region_mask {
+            Some(mask) => {
+                let detailed = decode_regions(mask);
+                let collapsed = collapse_regions(&detailed);
+                (detailed, collapsed)
+            }
+            None => (Vec::new(), Vec::new()),
+        };
 
         let mut entries = Vec::new();
         let mut raw_strings = Vec::new();
@@ -201,12 +232,13 @@ impl TuParser {
             file_path: String::new(),
             file_size: self.file_size,
             is_live: true,
-            is_title_update: true,
+            is_title_update,
+            content_kind: content_type_name(header.content_type).to_string(),
             media_id: format!("{:08X}", header.media_id),
             base_title_id: format!("{:08X}", header.base_title_id),
             content_type: format!("0x{:08X}", header.content_type),
             display_title: header.display_title,
-            region_mask: format!("{:08X}", header.region_mask),
+            region_mask: header.region_mask.map(|m| format!("{:08X}", m)),
             regions_detailed: detailed,
             regions: collapsed,
             directory_entries: entries,
@@ -216,7 +248,7 @@ impl TuParser {
 
     fn extract_strings_and_entries(
         &mut self,
-        xex_offset: u64,
+        xex_offset: Option<u64>,
         entries: &mut Vec<DirectoryEntry>,
         raw_strings: &mut Vec<(u64, String)>,
     ) -> Result<()> {
@@ -264,20 +296,26 @@ impl TuParser {
             }
         }
 
-        // STFS file table: 64-byte entries starting at 0xC000, bounded by
-        // the embedded XEX data (slot at xex_offset is the "XEX2" magic,
-        // not an entry; bytes past it are file data, not names).
+        // STFS file table: 64-byte entries starting at 0xC000. The table
+        // is densely packed: stop at the first all-zero slot. Upper bound
+        // is the embedded XEX data when present (slot at xex_offset is the
+        // "XEX2" magic, not an entry; bytes past it are file data), else EOF.
         let dir_start = 0xC000usize;
-        let dir_end = (xex_offset as usize).min(buffer.len());
+        let dir_end = xex_offset
+            .map(|x| x as usize)
+            .unwrap_or(buffer.len())
+            .min(buffer.len());
         let entry_size = 64;
-        for offset in (dir_start..dir_end).step_by(entry_size) {
-            if offset + entry_size > buffer.len() {
+        let mut offset = dir_start;
+        while offset + entry_size <= dir_end {
+            let entry_data = &buffer[offset..offset + entry_size];
+            if entry_data.iter().all(|&b| b == 0) {
                 break;
             }
-            let entry_data = &buffer[offset..offset + entry_size];
             if let Some(entry) = parse_directory_entry(entry_data, offset as u64) {
                 entries.push(entry);
             }
+            offset += entry_size;
         }
         Ok(())
     }
@@ -439,11 +477,22 @@ fn main() -> Result<()> {
         info.file_path = file_path.display().to_string();
         if args.verbose {
             eprintln!("  File size: {} bytes", info.file_size);
+            eprintln!("  Kind: {}", info.content_kind);
             eprintln!("  Media ID: {}", info.media_id);
             eprintln!("  Base title ID: {}", info.base_title_id);
             eprintln!("  Title: {}", info.display_title);
-            eprintln!("  Region mask: {}", info.region_mask);
-            eprintln!("  Regions: {}", info.regions.join(" "));
+            eprintln!(
+                "  Region mask: {}",
+                info.region_mask.as_deref().unwrap_or("n/a")
+            );
+            eprintln!(
+                "  Regions: {}",
+                if info.regions.is_empty() {
+                    "n/a".to_string()
+                } else {
+                    info.regions.join(" ")
+                }
+            );
         }
         all_results.push(info);
     }
@@ -463,16 +512,29 @@ fn main() -> Result<()> {
                     "Title Update: {}\n",
                     if info.is_title_update { "YES" } else { "NO" }
                 ));
+                out.push_str(&format!("Kind: {}\n", info.content_kind));
                 out.push_str(&format!("Media ID: {}\n", info.media_id));
                 out.push_str(&format!("Base title ID: {}\n", info.base_title_id));
                 out.push_str(&format!("Content type: {}\n", info.content_type));
                 out.push_str(&format!("Title: {}\n", info.display_title));
-                out.push_str(&format!("Region mask: {}\n", info.region_mask));
-                out.push_str(&format!("Regions: {}\n", info.regions.join(" ")));
                 out.push_str(&format!(
-                    "Regions (detailed): {}\n",
-                    info.regions_detailed.join(" ")
+                    "Region mask: {}\n",
+                    info.region_mask.as_deref().unwrap_or("n/a")
                 ));
+                out.push_str(&format!(
+                    "Regions: {}\n",
+                    if info.regions.is_empty() {
+                        "n/a".to_string()
+                    } else {
+                        info.regions.join(" ")
+                    }
+                ));
+                if !info.regions_detailed.is_empty() {
+                    out.push_str(&format!(
+                        "Regions (detailed): {}\n",
+                        info.regions_detailed.join(" ")
+                    ));
+                }
                 if args.show_entries || info.directory_entries.len() <= 50 {
                     out.push_str(&format!(
                         "\nDirectory entries ({}):\n",
@@ -596,5 +658,50 @@ mod tests {
         let parsed = parse_directory_entry(&entry, 0xC080).expect("dir parses");
         assert!(parsed.is_dir);
         assert_eq!(parsed.size, 0);
+    }
+
+    #[test]
+    fn content_kinds() {
+        assert_eq!(content_type_name(0x000B0000), "Title Update");
+        assert_eq!(content_type_name(0x00000002), "Marketplace Content (DLC)");
+        assert_eq!(content_type_name(0xDEADBEEF), "Unknown");
+    }
+
+    fn write_synthetic_dlc(path: &std::path::Path) {
+        // Minimal DLC-like LIVE container: header fields + 1 file-table
+        // entry, no TUPD signature area, no XEX.
+        let mut buf = vec![0u8; 0xC0C0];
+        buf[0..4].copy_from_slice(b"LIVE");
+        buf[0x344..0x348].copy_from_slice(&0x00000002u32.to_be_bytes());
+        buf[0x354..0x358].copy_from_slice(&0u32.to_be_bytes());
+        buf[0x360..0x364].copy_from_slice(&0x434307D2u32.to_be_bytes());
+        let title: Vec<u16> = "Miami Nights Key".encode_utf16().collect();
+        for (i, c) in title.iter().enumerate() {
+            buf[0x411 + i * 2..0x411 + i * 2 + 2].copy_from_slice(&c.to_be_bytes());
+        }
+        buf[0xC000..0xC00B].copy_from_slice(b"DSDLKey.bin");
+        buf[0xC000 + 0x28] = 0x49;
+        buf[0xC000 + 0x34..0xC000 + 0x38].copy_from_slice(&21u32.to_be_bytes());
+        std::fs::write(path, &buf).unwrap();
+    }
+
+    #[test]
+    fn dlc_without_xex_parses() {
+        let path = std::env::temp_dir().join(format!("tu_parser_dlc_{}.bin", std::process::id()));
+        write_synthetic_dlc(&path);
+        let mut parser = TuParser::open(&path).expect("synthetic dlc opens");
+        let info = parser.parse().expect("synthetic dlc parses");
+        std::fs::remove_file(&path).ok();
+
+        assert!(!info.is_title_update);
+        assert_eq!(info.content_kind, "Marketplace Content (DLC)");
+        assert_eq!(info.media_id, "00000000");
+        assert_eq!(info.base_title_id, "434307D2");
+        assert_eq!(info.display_title, "Miami Nights Key");
+        assert_eq!(info.region_mask, None);
+        assert!(info.regions.is_empty());
+        assert_eq!(info.directory_entries.len(), 1);
+        assert_eq!(info.directory_entries[0].filename, "DSDLKey.bin");
+        assert_eq!(info.directory_entries[0].size, 21);
     }
 }
