@@ -1,46 +1,31 @@
-# tu_parser
+# x360-rs
 
-[![CI](https://github.com/D221/tu_parser/actions/workflows/ci.yml/badge.svg)](https://github.com/D221/tu_parser/actions/workflows/ci.yml)
+[![CI](https://github.com/D221/x360-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/D221/x360-rs/actions/workflows/ci.yml)
 
-A small command-line tool that reads Xbox 360 **Title Update (TU)**,
-**DLC / Marketplace**, **XBLA**, **avatar**, **theme**, and **indie** content,
-raw and optimized **XISOs**, **Games on Demand (GoD)** headers, standalone
-**XEX**/**XBE** executables, and **extracted game directories** — and prints
-what they contain:
-game title, media ID, region mask/regions (TU only), XEX execution info,
-and file listings with sizes.
+A fast, streaming Xbox 360 container parser & extractor for:
+- **STFS** containers: Title Updates (TU), DLC/Marketplace, XBLA, Avatar, Theme, Indie, GoD
+- **XISO/GDF** images: XSF, XGD2, XGD1, XGD3 (raw & iso2god-optimized)
+- **Standalone executables**: XEX (ExecutionId), XBE (original Xbox)
+- **Extracted game directories**
 
-No GUI, no dependencies on the original tools — everything is parsed
-directly from the TU file itself. Accepts all three STFS container magics:
-`LIVE`, `CON `, and `PIRS` (identical header/table layout).
+Outputs game title, media ID, base title ID, region mask/regions (TU only), XEX execution info, and file listings with sizes.
+
+No GUI, no dependencies on original tools — everything parsed directly from the container. Accepts all three STFS container magics: `LIVE`, `CON `, `PIRS` (identical layout).
 
 ## Features
 
-- Validates the `LIVE` container magic and (for title updates) the `TUPD`
-  signature; detects content kind (`Title Update`, `Marketplace Content (DLC)`,
-  `Xbox Live Arcade (XBLA)`, `Avatar Item`, `Theme`)
-- Extracts the **media ID** (`0x354`), **base title ID** (`0x360`),
-  and **display title** (UTF-16BE at `0x411`) from the STFS/CON header
-- Parses the embedded game XEX `ExecutionId` field (`0x00040006`, per
-  iso2god-rs `src/executable/xex.rs`) for media/version/title IDs
-- Extracts the **region mask** (big-endian u32 at embedded `XEX2` + `0x1A0`)
-  and decodes it to region names using the same bit tests as the original
-  Title Update Checker (`PAL(A)`, `PAL(E)`, `NTSC/J`, `NTSC/J(J)`,
-  `NTSC/J(C)`, `NTSC/J(0)`, `NTSC/U`, `Region Free`)
-- Lists the STFS file table (64-byte entries at `0xC000`, densely packed —
-  scan stops at the first all-zero slot, bounded by the embedded XEX offset):
-  filename, table offset, file size (BE u32 at entry+`0x34`), directory flag
-- Parses raw **XISO/GDF** images (`MICROSOFT*XBOX*MEDIA` at sector `0x20`,
-  XSF/XGD2/XGD1/XGD3 data offsets): volume descriptor, recursive directory
-  tables, `default.xex`/`default.xbe` resolution — fully streaming, safe on
-  multi-GB images
-- Parses standalone **XEX** (`ExecutionId`) and **XBE** (title/version)
-  executables, and extracted game directories (`--game-dir`: tree stats +
-  executable info)
-- Text or JSON output, single files or whole directories (`--dir`,
-  `--recursive`). JSON reports are tagged unions (`"type": "stfs" |
-  "xiso" | "xex" | "xbe" | "gamedir"`). Unrecognized files in directory
-  sweeps warn and continue instead of aborting the run.
+- Validates `LIVE` container magic and (for TUs) `TUPD` signature; detects content kind (`Title Update`, `Marketplace Content (DLC)`, `Xbox Live Arcade (XBLA)`, `Avatar Item`, `Theme`, `Games on Demand (GoD)`)
+- Extracts **media ID** (`0x354`), **base title ID** (`0x360`), **display title** (UTF-16BE at `0x411`) from STFS/CON header
+- Parses embedded game XEX `ExecutionId` field (`0x00040006`, per iso2god-rs) for media/version/title IDs
+- Extracts **region mask** (BE u32 at `XEX2` + `0x1A0`) and decodes to region names using same bit tests as Title Update Checker (`PAL(A)`, `PAL(E)`, `NTSC/J`, `NTSC/J(J)`, `NTSC/J(C)`, `NTSC/J(0)`, `NTSC/U`, `Region Free`)
+- Lists STFS file table (64-byte entries at `0xC000`, densely packed — stops at first all-zero slot): filename, table offset, file size (BE u32 at entry+`0x34`), directory flag
+- Parses raw **XISO/GDF** images (`MICROSOFT*XBOX*MEDIA` at sector `0x20`, XSF/XGD2/XGD1/XGD3): volume descriptor (magic, root table, **creation timestamp**), recursive directory tables with **file attributes** (read-only, hidden, system, directory, archive, normal) and **tree structure** (left/right child offsets), `default.xex`/`default.xbe` resolution — fully streaming, safe on multi-GB images
+- Parses standalone **XEX** (`ExecutionId`) and **XBE** (title/version) executables, and extracted game directories (`--game-dir`: tree stats + executable info)
+- **Verifies** STFS hash chains (`--verify`): header SHA1, top hash, level-0 table hashes, every used data block hash. Exit code 1 on failure.
+- **Extracts** STFS contents (`--extract <DIR>`) with tree recreation, verifying every block during the walk
+- **Extracts** XISO/GDF contents (`--extract-iso <DIR>`) with multi-threaded parallel extraction (auto-selects fastest method: `parallel_4` on Windows, `mmap` on Unix). Benchmark mode (`--bench-extract-iso`) tests all methods and reports throughput.
+- Text or JSON output, single files or whole directories (`--dir`, `--recursive`). JSON reports are tagged unions (`"type": "stfs" | "xiso" | "xex" | "xbe" | "gamedir"`). Unrecognized files in directory sweeps warn and continue instead of aborting.
+- Extraction creates a subfolder named by Title ID (XISO) or Base Title ID (STFS) inside the output directory.
 
 ## Building
 
@@ -48,29 +33,41 @@ Requires a Rust toolchain ([rustup](https://rustup.rs/)):
 
 ```bash
 cargo build --release
-# binary: target/release/tu_parser(.exe)
+# binary: target/release/x360-rs(.exe)
 ```
 
 Prebuilt Windows and Linux binaries are attached to each
-[release](https://github.com/D221/tu_parser/releases).
+[release](https://github.com/D221/x360-rs/releases).
 
 ## Usage
 
 ```bash
 # Single file
-tu_parser "TU_1A58236_0000004000000.0000000000101"
+x360-rs "TU_1A58236_0000004000000.0000000000101"
 
 # Multiple files
-tu_parser file1 file2 --format json -o results.json
+x360-rs file1 file2 --format json -o results.json
 
 # Whole directory, optionally recursive
-tu_parser --dir ./TUs --recursive
+x360-rs --dir ./TUs --recursive
 
 # Extracted game directory
-tu_parser --game-dir ./extracted-game
+x360-rs --game-dir ./extracted-game
+
+# Verify hashes (exit 1 on failure)
+x360-rs file --verify
+
+# Extract STFS contents with tree recreation (hash-verified)
+x360-rs file --extract ./out
+
+# Extract XISO/GDF contents (auto-creates TitleID subfolder)
+x360-rs file --extract-iso ./out
+
+# Benchmark extraction methods
+x360-rs file --bench-extract-iso
 
 # Extra detail
-tu_parser file --show-entries --show-strings -v
+x360-rs file --show-entries --show-strings -v
 ```
 
 ### Options
@@ -81,9 +78,13 @@ tu_parser file --show-entries --show-strings -v
 | `--dir <DIR>` | Parse all files directly inside a directory (conflicts with `[FILES]`) |
 | `--recursive` | With `--dir`: descend into subdirectories |
 | `--game-dir <DIR>` | Parse an extracted game directory (tree stats + `default.xex`/`.xbe`) |
+| `--verify` | Verify STFS hashes (header, tables, data blocks); exit 1 on failure |
+| `--extract <DIR>` | Extract STFS contents into `DIR/<BaseTitleID>/` with tree recreation (hash-verified) |
+| `--extract-iso <DIR>` | Extract XISO/GDF contents into `DIR/<TitleID>/` (multi-threaded, auto-best method) |
+| `--bench-extract-iso` | Benchmark all XISO extraction methods, report fastest |
 | `-f, --format <text\|json>` | Output format (default: `text`) |
 | `-o, --output <FILE>` | Write output to a file instead of stdout |
-| `--show-entries` | Always list all directory entries (default lists them when ≤ 50) |
+| `--show-entries` | Always list all directory entries (default lists them when ≤ 50); for XISO also shows attributes & tree offsets |
 | `--show-strings` | List raw strings found in the file |
 | `-v, --verbose` | Print parse progress to stderr |
 

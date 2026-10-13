@@ -18,10 +18,10 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            bin: tu_parser
+            bin: x360-rs
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            bin: tu_parser.exe
+            bin: x360-rs.exe
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -32,12 +32,12 @@ jobs:
       - name: Package (Windows)
         if: matrix.os == 'windows-latest'
         shell: powershell
-        run: Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.bin }} -DestinationPath tu_parser-$env:GITHUB_REF_NAME-${{ matrix.target }}.zip
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.bin }} -DestinationPath x360-rs-$env:GITHUB_REF_NAME-${{ matrix.target }}.zip
       - name: Package (Linux)
         if: matrix.os == 'ubuntu-latest'
-        run: tar czf tu_parser-$GITHUB_REF_NAME-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release ${{ matrix.bin }}
+        run: tar czf x360-rs-$GITHUB_REF_NAME-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release ${{ matrix.bin }}
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: tu_parser-*
+          files: x360-rs-*
           generate_release_notes: true

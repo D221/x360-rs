@@ -1,8 +1,8 @@
 [package]
-name = "tu_parser"
+name = "x360-rs"
 version = "0.1.0"
 edition = "2021"
-description = "CLI parser for Xbox 360 Title Update (TU) files in LIVE/STFS containers"
+description = "Xbox 360 container parser & extractor (STFS: TU/DLC/XBLA/Avatar/Theme/GoD, XISO: XSF/XGD2/XGD1/XGD3, XEX, XBE, game dirs)"
 license = "MIT"
 
 [dependencies]
@@ -11,8 +11,31 @@ byteorder = "1.5"
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sha1 = "0.10"
 thiserror = "1.0"
+libc = { version = "0.2", optional = true }
+windows = { version = "0.58", optional = true, features = [
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+] }
+
+[target.'cfg(target_family = "unix")'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_family = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_Memory",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
+] }
 
 [profile.release]
 lto = true
 codegen-units = 1
+
+[[bin]]
+name = "x360-rs"
+path = "src/main.rs"
