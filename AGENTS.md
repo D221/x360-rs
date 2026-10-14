@@ -53,13 +53,13 @@ tu_parser/
 │   ├── report.rs         # Report types (Stfs, Xiso, Xex, Xbe, GameDir) for JSON/text output
 │   ├── render.rs         # Text/JSON output formatting
 │   ├── write/            # XISO creation/optimization (padding removal)
-│   │   ├── mod.rs        # Public API re-exports
+│   │   ├── mod.rs        # Public API (create/optimize entry points only)
 │   │   ├── format.rs     # OutputFormat (Xsf/Xgd2/Xgd3/Xgd1) + sector offsets
 │   │   ├── sector.rs     # SectorAllocator (linear, starts at 33)
-│   │   ├── volume.rs     # Volume descriptor writer (sector 32)
-│   │   ├── dirtab.rs     # Directory tree builder + table size calc
-│   │   ├── img.rs        # Two-pass writer: sizes bottom-up, allocate+copy top-down
-│   │   └── create.rs     # Directory-to-ISO creation (walk dir, on_disk sources)
+│   │   ├── volume.rs     # Volume descriptor writer (sector 32, ECMA-119 tail at 0x7EC)
+│   │   ├── dirtab.rs     # Tree builder, table sizing, index arena, dup checks (all iterative, no unsafe)
+│   │   ├── img.rs        # Two-pass writer via Writer struct over arena indices (no unsafe)
+│   │   └── create.rs     # Directory-to-ISO creation (iterative walk, skips output, rejects symlinks)
 │   ├── extract/
 │   │   ├── mod.rs        # Extraction orchestration
 │   │   ├── basic.rs      # Basic sequential extraction

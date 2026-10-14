@@ -1,15 +1,14 @@
 //! Create an XISO from an extracted game directory.
 
-#![allow(dead_code)]
+use std::path::Path;
 
-use std::fs;
-use std::path::{Path, PathBuf};
+use anyhow::Result;
 
-use anyhow::{Context, Result};
-
-use crate::write::dirtab::{calculate_sizes, calculate_sizes_recursive, DirEntry, DirTreeNode};
+use crate::write::dirtab::{
+    build_tree_from_dir_arena, calculate_arena_sizes, check_duplicates_arena,
+};
 use crate::write::format::OutputFormat;
-use crate::write::img::{check_duplicates, create_xiso_from_tree};
+use crate::write::img::create_xiso_from_arena;
 
 pub fn create_xiso_from_dir(
     dir: &Path,
@@ -21,83 +20,18 @@ pub fn create_xiso_from_dir(
         anyhow::bail!("not a directory: {}", dir.display());
     }
 
-    let mut root = build_tree_from_dir(dir)?;
-    calculate_sizes(&mut root);
-    calculate_sizes_recursive(&mut root);
-    check_duplicates(&root)?;
+    let mut arena = build_tree_from_dir_arena(dir, output)?;
+    calculate_arena_sizes(&mut arena);
+    check_duplicates_arena(&arena)?;
 
-    create_xiso_from_tree(root, None, 0, output, fmt, 0, log)
-}
-
-fn build_tree_from_dir(dir: &Path) -> Result<DirTreeNode> {
-    let mut collected: Vec<(String, bool, u64, PathBuf, Option<DirTreeNode>)> = Vec::new();
-
-    for entry in fs::read_dir(dir).with_context(|| format!("read_dir {}", dir.display()))? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let name = entry.file_name().to_string_lossy().to_string();
-
-        if file_type.is_symlink() {
-            anyhow::bail!("symlinks not supported");
-        }
-
-        if file_type.is_dir() {
-            let child = build_tree_from_dir(&entry.path())?;
-            collected.push((name, true, 0, entry.path(), Some(child)));
-        } else if file_type.is_file() {
-            let size = entry
-                .metadata()
-                .with_context(|| format!("metadata {}", entry.path().display()))?
-                .len();
-            collected.push((name, false, size, entry.path(), None));
-        } else {
-            anyhow::bail!("unsupported file type: {}", entry.path().display());
-        }
-    }
-
-    collected.sort_by(|a, b| a.0.cmp(&b.0));
-
-    let mut node = DirTreeNode {
-        path: PathBuf::new(),
-        entries: Vec::new(),
-        children: Vec::new(),
-        table_size_sectors: 0,
-        allocated_sector: 0,
-    };
-
-    for (name, is_dir, size, path, child) in collected {
-        if is_dir {
-            let child_index = node.children.len();
-            node.entries.push(DirEntry {
-                name,
-                is_dir: true,
-                size: 0,
-                attributes: 0x10,
-                source_sector: 0,
-                child_index: Some(child_index),
-                on_disk: None,
-            });
-            node.children.push(child.expect("directory child present"));
-        } else {
-            node.entries.push(DirEntry {
-                name,
-                is_dir: false,
-                size,
-                attributes: 0x20 | 0x80,
-                source_sector: 0,
-                child_index: None,
-                on_disk: Some(path),
-            });
-        }
-    }
-
-    Ok(node)
+    create_xiso_from_arena(arena, None, 0, output, fmt, 0, log)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::PathBuf;
 
     fn temp_dir(name: &str) -> PathBuf {
         let base = std::env::temp_dir().join(format!("tu_create_{}_{}", name, std::process::id()));
@@ -137,5 +71,45 @@ mod tests {
         let info = crate::parse::parse_iso(&out, fs::metadata(&out).unwrap().len()).unwrap();
         assert_eq!(info.entries.len(), 3); // a.txt, sub dir, sub/b.txt
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_stale_output_inside_source_is_excluded() {
+        let dir = temp_dir("stale");
+        fs::write(dir.join("hello.txt"), b"hello world").unwrap();
+        // Leftover output from a previous run must not be absorbed.
+        let out = dir.join("test.iso");
+        fs::write(&out, b"stale garbage, not an iso").unwrap();
+        create_xiso_from_dir(dir.as_path(), &out, OutputFormat::Xsf, &(|_| ())).unwrap();
+        let info = crate::parse::parse_iso(&out, fs::metadata(&out).unwrap().len()).unwrap();
+        assert_eq!(info.entries.len(), 1);
+        assert_eq!(info.entries[0].path, "hello.txt");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_deeply_nested_dirs_no_stack_overflow() {
+        use crate::write::dirtab::build_tree_from_dir_arena;
+        let dir = temp_dir("deep");
+        let mut cur = dir.clone();
+        for i in 0..500 {
+            cur = cur.join(format!("d{i}"));
+        }
+        fs::create_dir_all(&cur).unwrap();
+        fs::write(cur.join("leaf.txt"), b"leaf").unwrap();
+        // The builder itself handles arbitrary depth iteratively.
+        let arena = build_tree_from_dir_arena(&dir, &dir.join("deep.iso")).unwrap();
+        assert_eq!(arena.len(), 501); // root + 500 nested dirs
+                                      // End-to-end round-trip within the parser's depth guard.
+        let shallow: PathBuf = (0..30).map(|i| format!("d{i}")).collect();
+        let sdir = temp_dir("shallow");
+        fs::create_dir_all(sdir.join(&shallow)).unwrap();
+        fs::write(sdir.join(&shallow).join("leaf.txt"), b"leaf").unwrap();
+        let out = sdir.join("shallow.iso");
+        create_xiso_from_dir(sdir.as_path(), &out, OutputFormat::Xsf, &(|_| ())).unwrap();
+        let info = crate::parse::parse_iso(&out, fs::metadata(&out).unwrap().len()).unwrap();
+        assert_eq!(info.entries.len(), 31);
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&sdir);
     }
 }

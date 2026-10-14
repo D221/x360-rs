@@ -1,7 +1,5 @@
 //! Output format (XSF / XGD2 / XGD3 / XGD1) and its sector/header offsets.
 
-#![allow(dead_code)]
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum OutputFormat {
     Xsf,
@@ -17,14 +15,6 @@ pub fn sector_offset(fmt: OutputFormat) -> u64 {
         OutputFormat::Xgd3 => 0x02080000,
         OutputFormat::Xgd1 => 0x18300000,
     }
-}
-
-pub fn header_offset(fmt: OutputFormat) -> u64 {
-    sector_offset(fmt) + 0x10000
-}
-
-pub fn is_xgd(fmt: OutputFormat) -> bool {
-    !matches!(fmt, OutputFormat::Xsf)
 }
 
 /// Base file offset of the volume area for a parsed ISO type name.
@@ -52,18 +42,11 @@ mod tests {
     }
 
     #[test]
-    fn test_header_offsets() {
-        assert_eq!(header_offset(OutputFormat::Xsf), 0x10000);
-        assert_eq!(header_offset(OutputFormat::Xgd2), 0x10000 + 0x0FD90000);
-        assert_eq!(header_offset(OutputFormat::Xgd3), 0x10000 + 0x02080000);
-        assert_eq!(header_offset(OutputFormat::Xgd1), 0x10000 + 0x18300000);
-    }
-
-    #[test]
-    fn test_is_xgd() {
-        assert!(!is_xgd(OutputFormat::Xsf));
-        assert!(is_xgd(OutputFormat::Xgd2));
-        assert!(is_xgd(OutputFormat::Xgd3));
-        assert!(is_xgd(OutputFormat::Xgd1));
+    fn test_iso_type_offsets_mirror_sector_offsets() {
+        assert_eq!(iso_type_offset("XSF"), sector_offset(OutputFormat::Xsf));
+        assert_eq!(iso_type_offset("XGD2"), sector_offset(OutputFormat::Xgd2));
+        assert_eq!(iso_type_offset("XGD3"), sector_offset(OutputFormat::Xgd3));
+        assert_eq!(iso_type_offset("XGD1"), sector_offset(OutputFormat::Xgd1));
+        assert_eq!(iso_type_offset("unknown"), 0);
     }
 }

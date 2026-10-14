@@ -1,7 +1,5 @@
 //! Sector allocation helpers for writing XISO output.
 
-#![allow(dead_code)]
-
 /// Size of a single sector on an Xbox 360 disc image (bytes).
 pub const SECTOR_SIZE: u64 = 2048;
 
@@ -28,13 +26,6 @@ impl Default for SectorAllocator {
 }
 
 impl SectorAllocator {
-    /// Create an allocator whose first free sector is `start_sector`.
-    pub fn new(start_sector: u32) -> Self {
-        Self {
-            next_free: start_sector,
-        }
-    }
-
     /// Reserve `bytes` worth of contiguous sectors, returning the starting sector.
     pub fn allocate_contiguous(&mut self, bytes: u64) -> u32 {
         let start = self.next_free;

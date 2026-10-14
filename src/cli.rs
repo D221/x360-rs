@@ -56,7 +56,14 @@ pub(crate) struct Args {
     /// Uses `-o/--output` as the destination ISO path.
     #[arg(
         long,
-        conflicts_with_all = ["create", "game_dir", "dir", "extract", "extract_iso"]
+        conflicts_with_all = [
+            "create",
+            "game_dir",
+            "dir",
+            "extract",
+            "extract_iso",
+            "bench_extract_iso"
+        ]
     )]
     pub optimize: bool,
 
@@ -71,6 +78,7 @@ pub(crate) struct Args {
             "dir",
             "extract",
             "extract_iso",
+            "bench_extract_iso",
             "files"
         ]
     )]
@@ -79,7 +87,7 @@ pub(crate) struct Args {
     /// Output image format for --create (default: xsf).
     /// For --optimize the input format is preserved.
     #[arg(long, value_name = "FORMAT", default_value = "xsf")]
-    pub create_format: XisoFormat,
+    pub create_format: crate::write::format::OutputFormat,
 
     /// Overwrite input file in place (creates a .bak backup first).
     #[arg(long, requires = "optimize")]
@@ -97,25 +105,6 @@ pub(crate) struct Args {
 pub(crate) enum OutputFormat {
     Text,
     Json,
-}
-
-#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
-pub(crate) enum XisoFormat {
-    Xsf,
-    Xgd2,
-    Xgd3,
-    Xgd1,
-}
-
-impl From<XisoFormat> for crate::write::format::OutputFormat {
-    fn from(value: XisoFormat) -> Self {
-        match value {
-            XisoFormat::Xsf => crate::write::format::OutputFormat::Xsf,
-            XisoFormat::Xgd2 => crate::write::format::OutputFormat::Xgd2,
-            XisoFormat::Xgd3 => crate::write::format::OutputFormat::Xgd3,
-            XisoFormat::Xgd1 => crate::write::format::OutputFormat::Xgd1,
-        }
-    }
 }
 
 pub(crate) fn collect_files(

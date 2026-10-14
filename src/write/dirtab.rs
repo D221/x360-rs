@@ -1,8 +1,8 @@
-#![allow(dead_code)]
-
 use crate::iso::IsoEntry;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use anyhow::Result;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
@@ -21,7 +21,6 @@ pub struct DirTreeNode {
     pub entries: Vec<DirEntry>,
     pub children: Vec<DirTreeNode>,
     pub table_size_sectors: u32,
-    pub allocated_sector: u32,
 }
 
 /// Convert an `IsoEntryAttrs` value into the single GDF attribute byte.
@@ -62,6 +61,116 @@ fn join_components(components: &[String]) -> String {
     components.join("/")
 }
 
+/// Best-effort absolute path without requiring existence.
+fn absolutize(path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .unwrap_or_else(|_| PathBuf::from("."))
+            .join(path)
+    }
+}
+
+/// Build an arena directly from an on-disk directory, iteratively.
+///
+/// Single pass with an explicit stack, so arbitrarily deep trees cannot
+/// overflow the call stack. `output` (the ISO being created) is excluded
+/// from the walk so re-runs don't absorb a stale output left inside the
+/// source directory. Symlinks are rejected.
+pub(crate) fn build_tree_from_dir_arena(dir: &Path, output: &Path) -> Result<Vec<ArenaNode>> {
+    use anyhow::Context as _;
+
+    let dir_canon = dir
+        .canonicalize()
+        .with_context(|| format!("cannot resolve {}", dir.display()))?;
+    let out_abs = match std::fs::canonicalize(output) {
+        Ok(p) => p,
+        Err(_) => absolutize(output),
+    };
+
+    let mut arena = vec![ArenaNode {
+        path: PathBuf::new(),
+        entries: Vec::new(),
+        children: Vec::new(),
+        table_size_sectors: 0,
+    }];
+
+    // Stack of (on-disk directory, arena index). Children are pushed in
+    // reverse name order so they pop (and land in `children`) sorted.
+    let mut stack = vec![(dir_canon.clone(), 0usize)];
+    while let Some((fs_dir, idx)) = stack.pop() {
+        let mut collected: Vec<(String, std::fs::FileType, PathBuf)> = Vec::new();
+        for entry in
+            std::fs::read_dir(&fs_dir).with_context(|| format!("read_dir {}", fs_dir.display()))?
+        {
+            let entry = entry?;
+            let file_type = entry.file_type()?;
+            let name = entry.file_name().to_string_lossy().to_string();
+            collected.push((name, file_type, entry.path()));
+        }
+        collected.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Group child directories to push after files for deterministic order.
+        let mut pending_dirs: Vec<(PathBuf, usize)> = Vec::new();
+        for (name, file_type, path) in collected {
+            if path == out_abs {
+                if file_type.is_dir() {
+                    anyhow::bail!(
+                        "output path is a directory inside the source: {}",
+                        path.display()
+                    );
+                }
+                continue;
+            }
+            if file_type.is_symlink() {
+                anyhow::bail!("symlinks not supported: {}", path.display());
+            }
+            if file_type.is_dir() {
+                let child_idx = arena.len();
+                arena.push(ArenaNode {
+                    path: path.strip_prefix(&dir_canon).unwrap_or(&path).to_path_buf(),
+                    entries: Vec::new(),
+                    children: Vec::new(),
+                    table_size_sectors: 0,
+                });
+                let pos = arena[idx].children.len();
+                arena[idx].entries.push(DirEntry {
+                    name: name.clone(),
+                    is_dir: true,
+                    size: 0,
+                    attributes: 0x10,
+                    source_sector: 0,
+                    child_index: Some(pos),
+                    on_disk: None,
+                });
+                arena[idx].children.push(child_idx);
+                pending_dirs.push((path, child_idx));
+            } else if file_type.is_file() {
+                let size = std::fs::metadata(&path)
+                    .with_context(|| format!("metadata {}", path.display()))?
+                    .len();
+                arena[idx].entries.push(DirEntry {
+                    name,
+                    is_dir: false,
+                    size,
+                    attributes: 0x20 | 0x80,
+                    source_sector: 0,
+                    child_index: None,
+                    on_disk: Some(path),
+                });
+            } else {
+                anyhow::bail!("unsupported file type: {}", path.display());
+            }
+        }
+        // Visit subdirectories depth-first; reversed so names pop sorted.
+        for (path, child_idx) in pending_dirs.into_iter().rev() {
+            stack.push((path, child_idx));
+        }
+    }
+    Ok(arena)
+}
+
 fn ensure_dir_path(
     nodes: &mut Vec<DirTreeNode>,
     index_by_path: &mut BTreeMap<String, usize>,
@@ -91,7 +200,6 @@ fn ensure_dir_path(
             entries: Vec::new(),
             children: Vec::new(),
             table_size_sectors: 0,
-            allocated_sector: 0,
         });
         index_by_path.insert(key, new_idx);
         parent_indices.push(Some(current_idx));
@@ -130,7 +238,6 @@ pub fn build_dir_tree_from_entries(entries: &[IsoEntry]) -> DirTreeNode {
         entries: Vec::new(),
         children: Vec::new(),
         table_size_sectors: 0,
-        allocated_sector: 0,
     });
     index_by_path.insert(String::new(), 0);
     parent_indices.push(None);
@@ -143,14 +250,6 @@ pub fn build_dir_tree_from_entries(entries: &[IsoEntry]) -> DirTreeNode {
 
         // ISO files have no separate explicit directory entries sometimes; ensure
         // parents on demand. Explicitly listed directories also create nodes.
-        let final_attrs = if entry.is_dir {
-            attrs_to_byte(&entry.attrs)
-        } else {
-            crate::iso::GDF_ATTR_DIRECTORY
-        };
-        // Directory entries should carry the directory attribute bit.
-        let _ = final_attrs;
-
         if entry.is_dir {
             ensure_dir_path(
                 &mut nodes,
@@ -195,34 +294,57 @@ pub fn build_dir_tree_from_entries(entries: &[IsoEntry]) -> DirTreeNode {
     let total = nodes.len();
     let mut nodes_opt: Vec<Option<DirTreeNode>> = nodes.into_iter().map(Some).collect();
 
+    // Move children into their parents (reverse order so descendants settle
+    // before parents), recording each (parent, global index, local position)
+    // triple for the remap below.
+    let mut remap: Vec<(usize, usize, usize)> = Vec::new();
     for idx in (1..total).rev() {
         let parent_idx = parent_indices[idx].unwrap_or(0);
-        if let Some(parent) = nodes_opt[parent_idx].as_mut() {
-            // Remap from a global child index to an index inside `parent.children`.
-            for entry in &mut parent.entries {
-                if entry.child_index == Some(idx) {
-                    entry.child_index = Some(parent.children.len());
-                }
-            }
+        if let Some(parent) = nodes_opt[parent_idx].as_ref() {
+            remap.push((parent_idx, idx, parent.children.len()));
         }
         let child = nodes_opt[idx].take().expect("child node present");
         if let Some(parent) = nodes_opt[parent_idx].as_mut() {
             parent.children.push(child);
         }
     }
+    // Resolve entries to local positions with one lookup per entry: entries
+    // still hold global indices here, and each entry is visited exactly
+    // once, so a remapped value can never match a second lookup. (Matching
+    // remap items against live entry values instead aliases remapped
+    // positions against pending globals — e.g. globals 1..4 remap to
+    // 3,2,1,0 and global 3's entry would then also match global 1.)
+    {
+        let mut maps: BTreeMap<usize, BTreeMap<usize, usize>> = BTreeMap::new();
+        for (parent_idx, global_idx, local_pos) in remap {
+            maps.entry(parent_idx)
+                .or_default()
+                .insert(global_idx, local_pos);
+        }
+        for (parent_idx, map) in &maps {
+            if let Some(parent) = nodes_opt[*parent_idx].as_mut() {
+                for entry in &mut parent.entries {
+                    if let Some(global_idx) = entry.child_index {
+                        if let Some(&local_pos) = map.get(&global_idx) {
+                            entry.child_index = Some(local_pos);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     nodes_opt[0].take().expect("root node present")
 }
 
-/// Calculate the GDF directory table size for a single node, in sectors.
+/// Calculate the GDF directory table size for an entry list, in sectors.
 ///
-/// The node's `children` must already have had their sizes calculated so
-/// that directory entries receive their child-table byte sizes.
-pub fn calculate_table_size(node: &DirTreeNode) -> u32 {
+/// Entry layout is 14 header bytes plus the name, padded to a 4-byte
+/// boundary (matching the parser and the writer).
+pub fn table_size_for_entries(entries: &[DirEntry]) -> u32 {
     let mut size = 0usize;
-    for entry in &node.entries {
+    for entry in entries {
         let entry_bytes = 14 + entry.name.len();
-        // Parser pads each entry to a 4-byte boundary.
         let aligned = (entry_bytes + 3) & !3;
         size += aligned;
     }
@@ -233,41 +355,82 @@ pub fn calculate_table_size(node: &DirTreeNode) -> u32 {
     }
 }
 
-/// Calculate table sizes for every node, bottom-up, without recursion.
-pub fn calculate_sizes(node: &mut DirTreeNode) {
-    let root_ptr = node as *mut DirTreeNode;
-    let mut order = Vec::new();
-    let mut stack = vec![(root_ptr, false)];
-    while let Some((ptr, visited)) = stack.pop() {
-        if visited {
-            order.push(ptr);
-        } else {
-            stack.push((ptr, true));
-            let node = unsafe { ptr.as_mut().unwrap_unchecked() };
-            for i in (0..node.children.len()).rev() {
-                stack.push(((&mut node.children[i]) as *mut DirTreeNode, false));
-            }
+/// Flat, index-addressed view of a directory tree.
+///
+/// All write passes address nodes by index, so no raw pointers are needed
+/// anywhere in the writer. `children` preserves the order of the source
+/// node's children, keeping `DirEntry.child_index` positions valid.
+#[derive(Debug, Clone)]
+pub(crate) struct ArenaNode {
+    pub path: PathBuf,
+    pub entries: Vec<DirEntry>,
+    pub children: Vec<usize>,
+    pub table_size_sectors: u32,
+}
+
+/// Flatten a tree into an arena. Parents always precede their children,
+/// so a reverse-order pass runs bottom-up. Iterative: safe for any depth.
+pub(crate) fn flatten_tree(root: &DirTreeNode) -> Vec<ArenaNode> {
+    let mut arena: Vec<ArenaNode> = Vec::new();
+    let mut stack: Vec<(&DirTreeNode, Option<usize>)> = vec![(root, None)];
+    while let Some((node, parent)) = stack.pop() {
+        let idx = arena.len();
+        arena.push(ArenaNode {
+            path: node.path.clone(),
+            entries: node.entries.clone(),
+            children: Vec::with_capacity(node.children.len()),
+            table_size_sectors: 0,
+        });
+        if let Some(p) = parent {
+            arena[p].children.push(idx);
+        }
+        for child in node.children.iter().rev() {
+            stack.push((child, Some(idx)));
         }
     }
+    arena
+}
 
-    for ptr in order {
-        let node = unsafe { &mut *ptr };
+/// Calculate table sizes for every arena node, bottom-up.
+pub(crate) fn calculate_arena_sizes(arena: &mut [ArenaNode]) {
+    for i in (0..arena.len()).rev() {
+        let child_sizes: Vec<u32> = arena[i]
+            .children
+            .iter()
+            .map(|&c| arena[c].table_size_sectors)
+            .collect();
+        let node = &mut arena[i];
         for entry in &mut node.entries {
             if entry.is_dir {
-                if let Some(idx) = entry.child_index {
-                    if idx < node.children.len() {
-                        entry.size = node.children[idx].table_size_sectors as u64 * 2048;
+                if let Some(pos) = entry.child_index {
+                    if let Some(&sectors) = child_sizes.get(pos) {
+                        entry.size = sectors as u64 * 2048;
                     }
                 }
             }
         }
-        node.table_size_sectors = calculate_table_size(node);
+        node.table_size_sectors = table_size_for_entries(&node.entries);
     }
 }
 
-/// Backwards/plan-friendly alias.
-pub fn calculate_sizes_recursive(node: &mut DirTreeNode) {
-    calculate_sizes(node);
+/// Reject duplicate names per directory, case-sensitively and
+/// case-insensitively (GDF lookup is case-insensitive, so `A.TXT` and
+/// `a.txt` would collide on a real Xbox). Iterative over the arena.
+pub(crate) fn check_duplicates_arena(arena: &[ArenaNode]) -> Result<()> {
+    use std::collections::BTreeSet;
+    for node in arena {
+        let mut seen = BTreeSet::new();
+        let mut seen_folded = BTreeSet::new();
+        for entry in &node.entries {
+            if !seen.insert(entry.name.clone()) {
+                anyhow::bail!("duplicate entry: {}", entry.name);
+            }
+            if !seen_folded.insert(entry.name.to_lowercase()) {
+                anyhow::bail!("duplicate entry (case-insensitive): {}", entry.name);
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -323,15 +486,7 @@ mod tests {
 
     #[test]
     fn test_calculate_table_size_empty() {
-        let mut node = DirTreeNode {
-            path: "".into(),
-            entries: vec![],
-            children: vec![],
-            table_size_sectors: 0,
-            allocated_sector: 0,
-        };
-        node.table_size_sectors = calculate_table_size(&node);
-        assert_eq!(node.table_size_sectors, 1);
+        assert_eq!(table_size_for_entries(&[]), 1);
     }
 
     #[test]
@@ -359,8 +514,47 @@ mod tests {
     #[test]
     fn test_calculate_sizes_roundtrip_sizes() {
         let entries = [make_entry("a.txt", false, 100, 7)];
-        let mut root = build_dir_tree_from_entries(&entries);
-        calculate_sizes(&mut root);
-        assert!(root.table_size_sectors >= 1);
+        let root = build_dir_tree_from_entries(&entries);
+        let mut arena = flatten_tree(&root);
+        calculate_arena_sizes(&mut arena);
+        assert!(arena[0].table_size_sectors >= 1);
+    }
+
+    #[test]
+    fn test_case_insensitive_duplicates_rejected() {
+        let entries = [
+            make_entry("A.TXT", false, 10, 1),
+            make_entry("a.txt", false, 10, 2),
+        ];
+        let root = build_dir_tree_from_entries(&entries);
+        let arena = flatten_tree(&root);
+        assert!(check_duplicates_arena(&arena).is_err());
+    }
+
+    #[test]
+    fn test_sibling_child_indices_not_aliased() {
+        // Four subdirectories at globals 1..4 (the Sonic shape): the
+        // remap must resolve every entry to its own child node.
+        let mut entries = Vec::new();
+        for name in ["d1", "d2", "d3", "d4"] {
+            entries.push(make_entry(name, true, 0, 0));
+        }
+        for name in ["d1/f.txt", "d2/f.txt", "d3/f.txt", "d4/f.txt"] {
+            entries.push(make_entry(name, false, 10, 5));
+        }
+        let root = build_dir_tree_from_entries(&entries);
+        assert_eq!(root.children.len(), 4);
+        for entry in &root.entries {
+            assert!(entry.is_dir);
+            let child = &root.children[entry.child_index.unwrap()];
+            assert!(
+                child.path.ends_with(&entry.name),
+                "entry {} points at {:?}",
+                entry.name,
+                child.path
+            );
+            assert_eq!(child.entries.len(), 1);
+            assert_eq!(child.entries[0].name, "f.txt");
+        }
     }
 }

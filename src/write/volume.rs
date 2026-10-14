@@ -1,7 +1,5 @@
 //! XISO volume descriptor sector.
 
-#![allow(dead_code)]
-
 use byteorder::{LittleEndian, WriteBytesExt};
 use std::io::{Cursor, Write};
 

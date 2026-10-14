@@ -170,7 +170,7 @@ fn main() -> Result<()> {
         if out_path.starts_with(dir) {
             anyhow::bail!("destination path is contained by source path");
         }
-        let fmt = args.create_format.into();
+        let fmt = args.create_format;
         let log = |m: String| {
             if args.verbose {
                 eprintln!("{m}");
