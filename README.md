@@ -66,6 +66,14 @@ x360-rs file --extract-iso ./out
 # Benchmark extraction methods
 x360-rs file --bench-extract-iso
 
+# Optimize/repack XISO (removes padding, contiguous sectors)
+x360-rs game.iso --optimize -o game_opt.iso
+x360-rs game.iso --optimize --in-place --verify-output
+
+# Create XISO from an extracted directory
+x360-rs --create ./extracted-game -o game.iso
+x360-rs --create ./extracted-game -o game.xgd3.iso --create-format xgd3
+
 # Extra detail
 x360-rs file --show-entries --show-strings -v
 ```
@@ -82,6 +90,11 @@ x360-rs file --show-entries --show-strings -v
 | `--extract <DIR>` | Extract STFS contents into `DIR/<BaseTitleID>/` with tree recreation (hash-verified) |
 | `--extract-iso <DIR>` | Extract XISO/GDF contents into `DIR/<TitleID>/` (multi-threaded, auto-best method) |
 | `--bench-extract-iso` | Benchmark all XISO extraction methods, report fastest |
+| `--optimize` | Rebuild XISO with contiguous sectors (removes padding); uses `-o` as destination; `--in-place` overwrites with `.bak` backup; `--verify-output` re-parses and compares |
+| `--create <DIR>` | Build a new XISO from an extracted game directory; uses `-o` as destination |
+| `--create-format <xsf\|xgd2\|xgd3\|xgd1>` | Output image format for `--create` (default: `xsf`); `--optimize` preserves input format |
+| `--in-place` | With `--optimize`: overwrite input (backup to `.bak.iso` first, restore on failure) |
+| `--verify-output` | With `--optimize`: re-parse output and verify entry fidelity |
 | `-f, --format <text\|json>` | Output format (default: `text`) |
 | `-o, --output <FILE>` | Write output to a file instead of stdout |
 | `--show-entries` | Always list all directory entries (default lists them when ≤ 50); for XISO also shows attributes & tree offsets |

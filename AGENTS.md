@@ -52,6 +52,14 @@ tu_parser/
 │   ├── regions.rs        # Region mask bit decoding (matches original Title Update Checker)
 │   ├── report.rs         # Report types (Stfs, Xiso, Xex, Xbe, GameDir) for JSON/text output
 │   ├── render.rs         # Text/JSON output formatting
+│   ├── write/            # XISO creation/optimization (padding removal)
+│   │   ├── mod.rs        # Public API re-exports
+│   │   ├── format.rs     # OutputFormat (Xsf/Xgd2/Xgd3/Xgd1) + sector offsets
+│   │   ├── sector.rs     # SectorAllocator (linear, starts at 33)
+│   │   ├── volume.rs     # Volume descriptor writer (sector 32)
+│   │   ├── dirtab.rs     # Directory tree builder + table size calc
+│   │   ├── img.rs        # Two-pass writer: sizes bottom-up, allocate+copy top-down
+│   │   └── create.rs     # Directory-to-ISO creation (walk dir, on_disk sources)
 │   ├── extract/
 │   │   ├── mod.rs        # Extraction orchestration
 │   │   ├── basic.rs      # Basic sequential extraction
@@ -73,6 +81,8 @@ tu_parser/
 - XISO extraction auto-selects fastest method: parallel_4 on Windows, mmap on Unix
 - JSON output: tagged unions with type: stfs | xiso | xex | xbe | gamedir
 - Directory sweep (--dir --recursive): unrecognized files warn and continue (e.g., GOD DataNNNN parts)
+- XISO optimize (--optimize): two-pass rebuild with contiguous sectors from 33; preserves input format (XSF/XGD2/XGD3/XGD1); --in-place creates .bak backup with restore-on-failure; --verify-output re-parses and compares entries
+- XISO create (--create DIR -o out.iso --create-format xsf): walks directory, streams file bytes from disk; symlinks rejected
 
 ---
 
@@ -80,7 +90,7 @@ tu_parser/
 
 - All tests are self-contained in src/tests.rs - they generate synthetic binary data in temp dirs
 - No external test fixtures or network access required
-- Tests cover: region decoding, STFS entry parsing, container magics, content kinds, XEX exec info, DLC parsing, XISO parsing, XBE parsing, unknown file rejection, game dir parsing, STFS verify/extract/tamper detection, multi-level refusal, path resolution
+- Tests cover: region decoding, STFS entry parsing, container magics, content kinds, XEX exec info, DLC parsing, XISO parsing, XBE parsing, unknown file rejection, game dir parsing, STFS verify/extract/tamper detection, multi-level refusal, path resolution, XISO optimize round-trip + padding removal + XGD3 create round-trip
 
 Run specific test: cargo test <test_name> -- --nocapture
 

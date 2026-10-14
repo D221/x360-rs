@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufReader, Seek, SeekFrom};
 
 use crate::constants::{content_type_name, magic_name, TuError, MAGIC_CON, MAGIC_LIVE, MAGIC_PIRS};
-use crate::parse::{parse_file, parse_game_dir};
+use crate::parse::{parse_file, parse_game_dir, parse_iso};
 use crate::regions::{collapse_regions, decode_regions};
 use crate::report::Report;
 use crate::stfs::{entry_full_path, read_stfs_file, verify_stfs, StfsLayout};
@@ -409,4 +409,63 @@ fn stfs_paths_resolve() {
     assert_eq!(entry_full_path(&raw, 2), "sub/one.bin");
     assert_eq!(entry_full_path(&raw, 1), "big.bin");
     std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_optimize_roundtrip() {
+    use crate::write::format::OutputFormat as XisoFormat;
+    let path = std::env::temp_dir().join(format!("tu_opt_src_{}.iso", std::process::id()));
+    let out = std::env::temp_dir().join(format!("tu_opt_out_{}.iso", std::process::id()));
+    write_synthetic_xsf(&path);
+    let size = std::fs::metadata(&path).unwrap().len();
+    let info = parse_iso(&path, size).expect("synthetic parses");
+    crate::write::create_xiso_from_parsed(&info, &out, XisoFormat::Xsf, &(|_| ()))
+        .expect("optimize writes");
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let info2 = parse_iso(&out, out_size).expect("optimized re-parses");
+    assert_eq!(info2.entries.len(), info.entries.len());
+    assert_eq!(info2.entries[0].path, info.entries[0].path);
+    assert_eq!(info2.entries[0].size, info.entries[0].size);
+    assert_eq!(info2.entries[0].is_dir, info.entries[0].is_dir);
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&out).ok();
+}
+
+#[test]
+fn test_optimize_removes_padding() {
+    use crate::write::format::OutputFormat as XisoFormat;
+    let path = std::env::temp_dir().join(format!("tu_opt_pad_{}.iso", std::process::id()));
+    let out = std::env::temp_dir().join(format!("tu_opt_pad_out_{}.iso", std::process::id()));
+    write_synthetic_xsf(&path);
+    // Source places the single file at sector 50 (sparse layout).
+    let size = std::fs::metadata(&path).unwrap().len();
+    let info = parse_iso(&path, size).expect("synthetic parses");
+    assert_eq!(info.entries[0].sector, 50);
+    crate::write::create_xiso_from_parsed(&info, &out, XisoFormat::Xsf, &(|_| ()))
+        .expect("optimize writes");
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let info2 = parse_iso(&out, out_size).expect("optimized re-parses");
+    // Root table at 33, single file packed contiguously at 34.
+    assert_eq!(info2.root_sector, 33);
+    assert_eq!(info2.entries[0].sector, 34);
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&out).ok();
+}
+
+#[test]
+fn test_create_xgd3_roundtrip() {
+    use crate::write::format::OutputFormat as XisoFormat;
+    let dir = std::env::temp_dir().join(format!("tu_create_xgd3_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("hello.txt"), b"hello world").unwrap();
+    let out = std::env::temp_dir().join(format!("tu_create_xgd3_{}.iso", std::process::id()));
+    crate::write::create_xiso_from_dir(&dir, &out, XisoFormat::Xgd3, &(|_| ()))
+        .expect("xgd3 create writes");
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let info = parse_iso(&out, out_size).expect("xgd3 re-parses");
+    assert_eq!(info.iso_type, "XGD3");
+    assert_eq!(info.entries.len(), 1);
+    assert_eq!(info.entries[0].path, "hello.txt");
+    std::fs::remove_file(&out).ok();
+    std::fs::remove_dir_all(&dir).ok();
 }
