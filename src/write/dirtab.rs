@@ -12,6 +12,7 @@ pub struct DirEntry {
     pub attributes: u8,
     pub source_sector: u32,
     pub child_index: Option<usize>,
+    pub on_disk: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +103,7 @@ fn ensure_dir_path(
             attributes: default_attrs,
             source_sector: 0,
             child_index: Some(new_idx),
+            on_disk: None,
         });
 
         current_idx = new_idx;
@@ -182,6 +184,7 @@ pub fn build_dir_tree_from_entries(entries: &[IsoEntry]) -> DirTreeNode {
                 attributes: attrs_to_byte(&entry.attrs),
                 source_sector: entry.sector,
                 child_index: None,
+                on_disk: None,
             });
         }
     }

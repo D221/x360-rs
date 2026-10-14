@@ -4,7 +4,7 @@
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
@@ -34,7 +34,7 @@ fn iso_type_root_offset(iso_type: &str) -> u64 {
     }
 }
 
-fn check_duplicates(node: &DirTreeNode) -> Result<()> {
+pub(crate) fn check_duplicates(node: &DirTreeNode) -> Result<()> {
     use std::collections::BTreeSet;
     let mut seen = BTreeSet::new();
     for entry in &node.entries {
@@ -92,7 +92,7 @@ fn write_directory(
     node: &mut DirTreeNode,
     allocator: &mut SectorAllocator,
     output: &mut File,
-    source: &mut File,
+    source: &mut Option<File>,
     source_base: u64,
     output_base: u64,
     log: &dyn Fn(String),
@@ -233,14 +233,30 @@ fn write_directory(
                 anyhow::bail!("file too large for GDF");
             }
             let source_sector = unsafe { (&(*node_ptr).entries)[i].source_sector };
+            let on_disk = unsafe { (&(*node_ptr).entries)[i].on_disk.clone() };
             let file_sector = allocator.allocate_contiguous(size);
-            copy_file_data(
-                source,
-                source_base + source_sector as u64 * SECTOR_SIZE,
-                output,
-                output_base + file_sector as u64 * SECTOR_SIZE,
-                size,
-            )?;
+            if let Some(path) = on_disk {
+                let mut src_file = File::open(&path)
+                    .with_context(|| format!("open on-disk source {}", path.display()))?;
+                copy_file_data(
+                    &mut src_file,
+                    0,
+                    output,
+                    output_base + file_sector as u64 * SECTOR_SIZE,
+                    size,
+                )?;
+            } else {
+                let src = source
+                    .as_mut()
+                    .ok_or_else(|| anyhow::anyhow!("no source ISO for file entry"))?;
+                copy_file_data(
+                    src,
+                    source_base + source_sector as u64 * SECTOR_SIZE,
+                    output,
+                    output_base + file_sector as u64 * SECTOR_SIZE,
+                    size,
+                )?;
+            }
             let name = unsafe { (&(*node_ptr).entries)[i].name.clone() };
             let file_path = unsafe {
                 if (*node_ptr).path.as_os_str().is_empty() {
@@ -274,11 +290,35 @@ pub fn create_xiso_from_parsed(
     calculate_sizes_recursive(&mut root);
     check_duplicates(&root)?;
 
-    let source_base = iso_type_root_offset(&info.iso_type);
+    create_xiso_from_tree(
+        root,
+        Some(PathBuf::from(&info.file_path)),
+        iso_type_root_offset(&info.iso_type),
+        output,
+        fmt,
+        info.volume_timestamp.unwrap_or(0),
+        log,
+    )
+}
+
+pub fn create_xiso_from_tree(
+    mut root: DirTreeNode,
+    source_iso: Option<PathBuf>,
+    source_base: u64,
+    output: &Path,
+    fmt: OutputFormat,
+    volume_timestamp: u64,
+    log: &dyn Fn(String),
+) -> Result<()> {
     let output_base = sector_offset(fmt);
 
-    let mut source = File::open(&info.file_path)
-        .with_context(|| format!("failed to open source ISO {}", info.file_path))?;
+    let mut source = match source_iso {
+        Some(path) => Some(
+            File::open(&path)
+                .with_context(|| format!("failed to open source ISO {}", path.display()))?,
+        ),
+        None => None,
+    };
     let mut output_file = File::create(output)
         .with_context(|| format!("failed to create output {}", output.display()))?;
 
@@ -294,11 +334,8 @@ pub fn create_xiso_from_parsed(
         log,
     )?;
 
-    let volume_descriptor = VolumeDescriptor::new(
-        root_sector,
-        root.table_size_sectors,
-        info.volume_timestamp.unwrap_or(0),
-    );
+    let volume_descriptor =
+        VolumeDescriptor::new(root_sector, root.table_size_sectors, volume_timestamp);
     let descriptor_offset = output_base + 32 * SECTOR_SIZE;
     output_file
         .seek(SeekFrom::Start(descriptor_offset))
