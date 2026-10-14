@@ -27,6 +27,9 @@ impl VolumeDescriptor {
     }
 
     /// Serialize the descriptor into a 2048-byte sector.
+    ///
+    /// Layout (matches extract-xiso/xdvdfs): magic(20) + root sector(4) +
+    /// root size(4) + creation time(8) + unused zero area(0x7C8) + magic(20).
     pub fn serialize(&self) -> Vec<u8> {
         let mut buf = vec![0u8; 2048];
         let mut cursor = Cursor::new(&mut buf[..]);
@@ -40,7 +43,7 @@ impl VolumeDescriptor {
         cursor
             .write_u64::<LittleEndian>(self.creation_time)
             .unwrap();
-        cursor.set_position(44);
+        cursor.set_position(2028);
         cursor.write_all(VOLUME_MAGIC).unwrap();
         buf
     }
@@ -72,8 +75,11 @@ mod tests {
 
     #[test]
     fn test_volume_descriptor_tail_magic() {
+        // ECMA-119 style layout used by extract-xiso/xdvdfs: the tail magic
+        // closes the 2048-byte sector at 0x7EC, after the 0x7C8 unused area.
         let vd = VolumeDescriptor::new(1, 2, 3);
         let bytes = vd.serialize();
-        assert_eq!(&bytes[44..64], b"MICROSOFT*XBOX*MEDIA");
+        assert_eq!(&bytes[2028..2048], b"MICROSOFT*XBOX*MEDIA");
+        assert_eq!(&bytes[36..2028], &vec![0u8; 2028 - 36][..]);
     }
 }

@@ -133,14 +133,30 @@ fn write_directory(
                     anyhow::bail!("entry too large for GDF");
                 }
                 let name_bytes = name.as_bytes();
+                if name_bytes.len() > 255 {
+                    anyhow::bail!("file name too long for GDF: {}", name);
+                }
                 let entry_size = (14 + name_bytes.len() + 3) & !3;
                 if pos + entry_size > buffer.len() {
                     anyhow::bail!("directory table overflow");
                 }
+                // Chain entries as a right-linked list (dword offsets from
+                // the table start) so tree-walking readers visit every
+                // entry; a table of all-zero offsets reads as one entry.
+                // GDF offsets are u16, capping a table at 256 KiB.
+                let right: u16 = if i + 1 < count {
+                    let next = (pos + entry_size) / 4;
+                    if next > u16::MAX as usize {
+                        anyhow::bail!("directory table too large for GDF offsets");
+                    }
+                    next as u16
+                } else {
+                    0
+                };
                 buffer[pos] = 0;
                 buffer[pos + 1] = 0;
-                buffer[pos + 2] = 0;
-                buffer[pos + 3] = 0;
+                buffer[pos + 2] = (right & 0xFF) as u8;
+                buffer[pos + 3] = (right >> 8) as u8;
                 bytestore_u32_le(&mut buffer[pos + 4..pos + 8], sector);
                 bytestore_u32_le(&mut buffer[pos + 8..pos + 12], size as u32);
                 buffer[pos + 12] = attrs;

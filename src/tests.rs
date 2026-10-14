@@ -568,3 +568,27 @@ fn test_zero_byte_file_does_not_truncate_table() {
     std::fs::remove_file(&out).ok();
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn test_written_tables_chain_entries_right() {
+    use crate::write::format::OutputFormat as XisoFormat;
+    // Tree-walking readers (extract-xiso, xdvdfs) follow right-child
+    // offsets, so entries must form a right-linked chain; a table of
+    // all-zero offsets reads as a single entry to them.
+    let dir = std::env::temp_dir().join(format!("tu_chain_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.txt"), b"a").unwrap();
+    std::fs::write(dir.join("b.txt"), b"bb").unwrap();
+    std::fs::write(dir.join("c.txt"), b"ccc").unwrap();
+    let out = std::env::temp_dir().join(format!("tu_chain_{}.iso", std::process::id()));
+    crate::write::create_xiso_from_dir(&dir, &out, XisoFormat::Xsf, &(|_| ()))
+        .expect("create writes");
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let info = parse_iso(&out, out_size).expect("output re-parses");
+    assert_eq!(info.entries.len(), 3);
+    // First entry must point at the second; last entry terminates the chain.
+    assert_ne!(info.entries[0].right_child_offset, Some(0));
+    assert_eq!(info.entries[2].right_child_offset, Some(0));
+    std::fs::remove_file(&out).ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
