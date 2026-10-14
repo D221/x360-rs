@@ -13,8 +13,8 @@ mod stfs;
 mod tests;
 mod tu_header;
 mod tu_parser;
+mod write;
 mod xex;
-
 use anyhow::Result;
 use clap::Parser;
 
