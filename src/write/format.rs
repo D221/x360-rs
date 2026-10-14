@@ -27,6 +27,18 @@ pub fn is_xgd(fmt: OutputFormat) -> bool {
     !matches!(fmt, OutputFormat::Xsf)
 }
 
+/// Base file offset of the volume area for a parsed ISO type name.
+/// Mirrors `sector_offset` but takes the `iso_type` string reported by
+/// the parser (`"XSF"`, `"XGD2"`, `"XGD3"`, `"XGD1"`).
+pub fn iso_type_offset(iso_type: &str) -> u64 {
+    match iso_type {
+        "XGD2" => 0x0FD90000,
+        "XGD3" => 0x02080000,
+        "XGD1" => 0x18300000,
+        _ => 0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

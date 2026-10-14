@@ -35,6 +35,17 @@ fn detect_output_format(iso_type: &str) -> crate::write::format::OutputFormat {
     }
 }
 
+/// Restore `input` from `backup` after a failed in-place optimize.
+///
+/// The failed write leaves a partial file at `input`; on Windows `rename`
+/// fails when the target exists, so the partial file must be removed first.
+/// Both operations are best-effort: there is nothing further to recover if
+/// the restore itself fails.
+pub(crate) fn restore_backup(backup: &std::path::Path, input: &std::path::Path) {
+    std::fs::remove_file(input).ok();
+    std::fs::rename(backup, input).ok();
+}
+
 fn optimize_one(
     src: &std::path::Path,
     out: &std::path::Path,
@@ -77,6 +88,9 @@ fn verify_optimize_fidelity(
             after.entries.len()
         );
     }
+    if before.volume_timestamp != after.volume_timestamp {
+        anyhow::bail!("volume timestamp changed");
+    }
     let mut a: BTreeMap<(&str, u64), &crate::iso::IsoEntry> = BTreeMap::new();
     for e in &before.entries {
         if a.insert((e.path.as_str(), e.size), e).is_some() {
@@ -89,12 +103,54 @@ fn verify_optimize_fidelity(
                 if src.is_dir != e.is_dir {
                     anyhow::bail!("type changed for {}", e.path);
                 }
+                if src.attrs != e.attrs {
+                    anyhow::bail!("attributes changed for {}", e.path);
+                }
+                if !e.is_dir && e.size > 0 {
+                    compare_iso_file_bytes(before, src, after, e)?;
+                }
             }
             None => anyhow::bail!("unexpected entry in output: {}", e.path),
         }
     }
     if !a.is_empty() {
         anyhow::bail!("{} entries missing from output", a.len());
+    }
+    Ok(())
+}
+
+/// Stream-compare the data bytes of one file entry between two images.
+fn compare_iso_file_bytes(
+    before: &crate::iso::IsoInfo,
+    b_entry: &crate::iso::IsoEntry,
+    after: &crate::iso::IsoInfo,
+    a_entry: &crate::iso::IsoEntry,
+) -> Result<()> {
+    use std::fs::File;
+    use std::io::{Read, Seek, SeekFrom};
+    const BUF: usize = 1024 * 1024;
+    let base_b = crate::write::iso_type_offset(&before.iso_type);
+    let base_a = crate::write::iso_type_offset(&after.iso_type);
+    let sector = crate::write::SECTOR_SIZE;
+    let mut fb = File::open(&before.file_path)
+        .with_context(|| format!("open {} for verify", before.file_path))?;
+    let mut fa = File::open(&after.file_path)
+        .with_context(|| format!("open {} for verify", after.file_path))?;
+    fb.seek(SeekFrom::Start(base_b + b_entry.sector as u64 * sector))
+        .context("seek source file data for verify")?;
+    fa.seek(SeekFrom::Start(base_a + a_entry.sector as u64 * sector))
+        .context("seek output file data for verify")?;
+    let mut remaining = b_entry.size;
+    let mut bb = vec![0u8; BUF];
+    let mut ba = vec![0u8; BUF];
+    while remaining > 0 {
+        let n = (remaining as usize).min(BUF);
+        fb.read_exact(&mut bb[..n]).context("read source bytes")?;
+        fa.read_exact(&mut ba[..n]).context("read output bytes")?;
+        if bb[..n] != ba[..n] {
+            anyhow::bail!("content differs for {}", a_entry.path);
+        }
+        remaining -= n as u64;
     }
     Ok(())
 }
@@ -152,7 +208,7 @@ fn main() -> Result<()> {
                         }
                         Err(e) => {
                             // Restore original on failure.
-                            std::fs::rename(&backup, input).ok();
+                            restore_backup(&backup, input);
                             Err(e)
                         }
                     }

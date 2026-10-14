@@ -469,3 +469,102 @@ fn test_create_xgd3_roundtrip() {
     std::fs::remove_file(&out).ok();
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn test_multisector_root_size_in_bytes() {
+    use crate::write::format::OutputFormat as XisoFormat;
+    // Enough entries to force a multi-sector root directory table.
+    let dir = std::env::temp_dir().join(format!("tu_root_bytes_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for i in 0..150 {
+        std::fs::write(dir.join(format!("file_{i:03}.txt")), b"x").unwrap();
+    }
+    let out = std::env::temp_dir().join(format!("tu_root_bytes_{}.iso", std::process::id()));
+    crate::write::create_xiso_from_dir(&dir, &out, XisoFormat::Xsf, &(|_| ()))
+        .expect("create writes");
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let info = parse_iso(&out, out_size).expect("output re-parses");
+    assert!(info.root_size > 2048, "root table should span sectors");
+    assert_eq!(
+        info.root_size % 2048,
+        0,
+        "root_size must be a byte count, got {}",
+        info.root_size
+    );
+    // Root table occupies root_size bytes starting at root_sector.
+    let sectors = info.root_size / 2048;
+    assert_eq!(info.root_size, sectors * 2048);
+    std::fs::remove_file(&out).ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn test_restore_backup_replaces_partial() {
+    let dir = std::env::temp_dir().join(format!("tu_restore_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let input = dir.join("game.iso");
+    let backup = dir.join("game.bak.iso");
+    std::fs::write(&backup, b"original").unwrap();
+    std::fs::write(&input, b"partial-output").unwrap();
+    crate::restore_backup(&backup, &input);
+    assert_eq!(std::fs::read(&input).unwrap(), b"original");
+    assert!(!backup.exists());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn test_verify_fidelity_catches_content_tamper() {
+    use crate::write::format::OutputFormat as XisoFormat;
+    let path = std::env::temp_dir().join(format!("tu_tamper_src_{}.iso", std::process::id()));
+    let out = std::env::temp_dir().join(format!("tu_tamper_out_{}.iso", std::process::id()));
+    write_synthetic_xsf(&path);
+    let size = std::fs::metadata(&path).unwrap().len();
+    let info = parse_iso(&path, size).expect("synthetic parses");
+    crate::write::create_xiso_from_parsed(&info, &out, XisoFormat::Xsf, &(|_| ()))
+        .expect("optimize writes");
+    // Flip a byte inside the copied file data (file lands at sector 34).
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = std::fs::OpenOptions::new().write(true).open(&out).unwrap();
+        f.seek(SeekFrom::Start(34 * 2048)).unwrap();
+        f.write_all(&[0xFF]).unwrap();
+    }
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let tampered = parse_iso(&out, out_size).expect("tampered re-parses");
+    assert!(crate::verify_optimize_fidelity(&info, &tampered).is_err());
+    std::fs::remove_file(&path).ok();
+    std::fs::remove_file(&out).ok();
+}
+
+#[test]
+fn test_verify_fidelity_catches_attr_and_timestamp_diff() {
+    let path = std::env::temp_dir().join(format!("tu_attr_src_{}.iso", std::process::id()));
+    write_synthetic_xsf(&path);
+    let size = std::fs::metadata(&path).unwrap().len();
+    let info = parse_iso(&path, size).expect("synthetic parses");
+    let mut changed = info.clone();
+    changed.entries[0].attrs.archive = !changed.entries[0].attrs.archive;
+    assert!(crate::verify_optimize_fidelity(&info, &changed).is_err());
+    let mut changed_ts = info.clone();
+    changed_ts.volume_timestamp = Some(info.volume_timestamp.unwrap_or(0).wrapping_add(1));
+    assert!(crate::verify_optimize_fidelity(&info, &changed_ts).is_err());
+    std::fs::remove_file(&path).ok();
+}
+
+#[test]
+fn test_zero_byte_file_does_not_truncate_table() {
+    use crate::write::format::OutputFormat as XisoFormat;
+    let dir = std::env::temp_dir().join(format!("tu_zero_byte_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("empty.txt"), b"").unwrap();
+    std::fs::write(dir.join("after.txt"), b"data").unwrap();
+    let out = std::env::temp_dir().join(format!("tu_zero_byte_{}.iso", std::process::id()));
+    crate::write::create_xiso_from_dir(&dir, &out, XisoFormat::Xsf, &(|_| ()))
+        .expect("create writes");
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let info = parse_iso(&out, out_size).expect("output re-parses");
+    assert_eq!(info.entries.len(), 2);
+    assert!(info.entries.iter().any(|e| e.path == "after.txt"));
+    std::fs::remove_file(&out).ok();
+    std::fs::remove_dir_all(&dir).ok();
+}

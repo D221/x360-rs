@@ -12,7 +12,7 @@ use crate::iso::IsoInfo;
 use crate::write::dirtab::{
     build_dir_tree_from_entries, calculate_sizes, calculate_sizes_recursive, DirTreeNode,
 };
-use crate::write::format::{sector_offset, OutputFormat};
+use crate::write::format::{iso_type_offset, sector_offset, OutputFormat};
 use crate::write::sector::{required_sectors, SectorAllocator, SECTOR_SIZE};
 use crate::write::volume::VolumeDescriptor;
 
@@ -25,13 +25,7 @@ struct WriteFrame {
 }
 
 fn iso_type_root_offset(iso_type: &str) -> u64 {
-    match iso_type {
-        "XSF" => 0,
-        "XGD2" => 0x0FD9_0000,
-        "XGD3" => 0x0208_0000,
-        "XGD1" => 0x1830_0000,
-        _ => 0,
-    }
+    iso_type_offset(iso_type)
 }
 
 pub(crate) fn check_duplicates(node: &DirTreeNode) -> Result<()> {
@@ -334,8 +328,11 @@ pub fn create_xiso_from_tree(
         log,
     )?;
 
-    let volume_descriptor =
-        VolumeDescriptor::new(root_sector, root.table_size_sectors, volume_timestamp);
+    let volume_descriptor = VolumeDescriptor::new(
+        root_sector,
+        root.table_size_sectors * SECTOR_SIZE as u32,
+        volume_timestamp,
+    );
     let descriptor_offset = output_base + 32 * SECTOR_SIZE;
     output_file
         .seek(SeekFrom::Start(descriptor_offset))
