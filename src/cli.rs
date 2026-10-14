@@ -52,6 +52,43 @@ pub(crate) struct Args {
     #[arg(long, conflicts_with = "extract")]
     pub bench_extract_iso: bool,
 
+    /// Optimize/repack existing XISO (removes padding, contiguous sectors).
+    /// Uses `-o/--output` as the destination ISO path.
+    #[arg(
+        long,
+        conflicts_with_all = ["create", "game_dir", "dir", "extract", "extract_iso"]
+    )]
+    pub optimize: bool,
+
+    /// Create a new XISO from an extracted game directory.
+    /// Uses `-o/--output` as the destination ISO path.
+    #[arg(
+        long,
+        value_name = "DIR",
+        conflicts_with_all = [
+            "optimize",
+            "game_dir",
+            "dir",
+            "extract",
+            "extract_iso",
+            "files"
+        ]
+    )]
+    pub create: Option<PathBuf>,
+
+    /// Output image format for --create (default: xsf).
+    /// For --optimize the input format is preserved.
+    #[arg(long, value_name = "FORMAT", default_value = "xsf")]
+    pub create_format: XisoFormat,
+
+    /// Overwrite input file in place (creates a .bak backup first).
+    #[arg(long, requires = "optimize")]
+    pub in_place: bool,
+
+    /// Re-parse the optimized output and verify entry fidelity.
+    #[arg(long, requires = "optimize")]
+    pub verify_output: bool,
+
     #[arg(short, long)]
     pub verbose: bool,
 }
@@ -60,6 +97,25 @@ pub(crate) struct Args {
 pub(crate) enum OutputFormat {
     Text,
     Json,
+}
+
+#[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq, Eq)]
+pub(crate) enum XisoFormat {
+    Xsf,
+    Xgd2,
+    Xgd3,
+    Xgd1,
+}
+
+impl From<XisoFormat> for crate::write::format::OutputFormat {
+    fn from(value: XisoFormat) -> Self {
+        match value {
+            XisoFormat::Xsf => crate::write::format::OutputFormat::Xsf,
+            XisoFormat::Xgd2 => crate::write::format::OutputFormat::Xgd2,
+            XisoFormat::Xgd3 => crate::write::format::OutputFormat::Xgd3,
+            XisoFormat::Xgd1 => crate::write::format::OutputFormat::Xgd1,
+        }
+    }
 }
 
 pub(crate) fn collect_files(
