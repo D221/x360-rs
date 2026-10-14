@@ -31,9 +31,15 @@ impl VolumeDescriptor {
         let mut buf = vec![0u8; 2048];
         let mut cursor = Cursor::new(&mut buf[..]);
         cursor.write_all(VOLUME_MAGIC).unwrap();
-        cursor.write_u32::<LittleEndian>(self.root_table_sector).unwrap();
-        cursor.write_u32::<LittleEndian>(self.root_table_size).unwrap();
-        cursor.write_u64::<LittleEndian>(self.creation_time).unwrap();
+        cursor
+            .write_u32::<LittleEndian>(self.root_table_sector)
+            .unwrap();
+        cursor
+            .write_u32::<LittleEndian>(self.root_table_size)
+            .unwrap();
+        cursor
+            .write_u64::<LittleEndian>(self.creation_time)
+            .unwrap();
         cursor.set_position(44);
         cursor.write_all(VOLUME_MAGIC).unwrap();
         buf
