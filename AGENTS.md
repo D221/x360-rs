@@ -36,7 +36,7 @@ Binary output: target/release/x360-rs (.exe on Windows)
 ## Project Structure
 
 tu_parser/
-├── Cargo.toml          # deps: anyhow, byteorder, clap 4 (derive), serde, sha1 (STFS); NO md5/sha2 crates
+├── Cargo.toml          # deps: anyhow, byteorder, clap 4 (derive), serde, sha1 (STFS), md5 + sha2 (hash commands)
 ├── Cargo.lock
 ├── LICENSE (MIT)
 ├── README.md           # update the Options table when adding CLI flags
@@ -137,7 +137,7 @@ Run specific test: cargo test <test_name> -- --nocapture
 - STFS extraction: src/extract/basic.rs, parallel.rs, mmap.rs
 - XISO extraction: same files, entry point extract_iso_fast_with_progress in extract/mod.rs
 - Single-file extraction: `--copy-out <PATH> -o <DEST>` (xdvdfs `copy-out` equivalent, `extract::copy_out_iso`); single input file, case-insensitive GDF match, files and dir subtrees
-- Per-file md5 / deterministic image checksum (xdvdfs `md5`/`checksum` equivalent) does not exist yet; needs new `md5`/`sha2` deps (only `sha1` is vendored for STFS)
+- Content hashes: `--md5` (per-file, `extract::md5_iso`; file lines match xdvdfs `md5` exactly) and `--checksum` (SHA256 over file bytes in sorted-path order, `extract::checksum_iso`; x360-rs-specific values, same purpose as xdvdfs `checksum`)
 - Benchmark: cargo run -- --bench-extract-iso <file>
 
 ---

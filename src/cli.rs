@@ -74,6 +74,16 @@ pub(crate) struct Args {
     )]
     pub copy_out: Option<String>,
 
+    /// Print MD5 checksums for files in XISO image(s)
+    /// (same as xdvdfs md5, files only).
+    #[arg(long)]
+    pub md5: bool,
+
+    /// Print a deterministic SHA256 over XISO image contents
+    /// (same purpose as xdvdfs checksum; values are x360-rs-specific).
+    #[arg(long)]
+    pub checksum: bool,
+
     /// Benchmark all XISO extraction methods and show fastest.
     #[arg(long, conflicts_with = "extract")]
     pub bench_extract_iso: bool,

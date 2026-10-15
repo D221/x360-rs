@@ -19,7 +19,9 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use crate::cli::{collect_files, Args, OutputFormat};
-use crate::extract::{benchmark_extract_iso, copy_out_iso, extract_iso_fast_with_progress};
+use crate::extract::{
+    benchmark_extract_iso, checksum_iso, copy_out_iso, extract_iso_fast_with_progress, md5_iso,
+};
 use crate::parse::{parse_file, parse_game_dir, parse_iso};
 use crate::render::{emit, report_summary};
 use crate::report::Report;
@@ -499,6 +501,25 @@ fn main() -> Result<()> {
                             }
                         }
                         std::fs::remove_dir_all(&bench_dir).ok();
+                    }
+                    // Content hash reports (xdvdfs md5/checksum equivalents).
+                    // The output is the result itself, so --quiet suppresses
+                    // it outright (same spirit as the parse report); warnings stay.
+                    if (args.md5 || args.checksum) && !args.quiet {
+                        if let Err(e) = (|| -> Result<()> {
+                            if args.md5 {
+                                for (path, digest) in md5_iso(info)? {
+                                    println!("{digest}  /{path}");
+                                }
+                            }
+                            if args.checksum {
+                                println!("{}  {}", checksum_iso(info)?, file_path.display());
+                            }
+                            Ok(())
+                        })() {
+                            failures += 1;
+                            eprintln!("warning: hash {}: {:#}", file_path.display(), e);
+                        }
                     }
                 }
                 all_results.push(other);

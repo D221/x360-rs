@@ -570,6 +570,39 @@ fn test_zero_byte_file_does_not_truncate_table() {
 }
 
 #[test]
+fn test_md5_and_checksum_match_known_values() {
+    use crate::extract::{checksum_iso, md5_iso};
+    use crate::write::format::OutputFormat as XisoFormat;
+    let dir = std::env::temp_dir().join(format!("tu_hash_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("a.txt"), b"aaa").unwrap();
+    std::fs::write(dir.join("sub").join("b.txt"), b"bbbb").unwrap();
+    let out = std::env::temp_dir().join(format!("tu_hash_{}.iso", std::process::id()));
+    crate::write::create_xiso_from_dir(&dir, &out, XisoFormat::Xsf, &(|_| ()))
+        .expect("create writes");
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let mut info = parse_iso(&out, out_size).expect("output re-parses");
+    info.file_path = out.display().to_string();
+
+    // md5("aaa") cross-checked against xdvdfs md5 on the same bytes.
+    let sums = md5_iso(&info).expect("md5 runs");
+    assert_eq!(sums.len(), 2);
+    assert_eq!(sums[0].0, "a.txt");
+    assert_eq!(sums[0].1, "47bce5c74f589f4867dbd57e9ca9f808");
+    assert_eq!(sums[1].0, "sub/b.txt");
+
+    // sha256("aaa" + "bbbb") — sorted-path concatenation, hardcoded.
+    assert_eq!(
+        checksum_iso(&info).expect("checksum runs"),
+        "9ca7ecf4b32b8fecce8d724cafb1cdf50901a23541250814f663844759192049"
+    );
+
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_copy_out_single_file_and_subtree() {
     use crate::extract::copy_out_iso;
     use crate::write::format::OutputFormat as XisoFormat;

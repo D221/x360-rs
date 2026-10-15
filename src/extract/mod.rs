@@ -170,7 +170,90 @@ fn stream_entry_bytes(
     Ok(())
 }
 
-/// Sanitize a string for use as a directory name.
+/// MD5 hex digest of one entry's data bytes, streamed from the image.
+fn md5_entry_bytes(source: &mut File, base: u64, sector: u32, size: u64) -> Result<String> {
+    use anyhow::Context as _;
+    const BUF: usize = 1024 * 1024;
+    source
+        .seek(SeekFrom::Start(base + sector as u64 * SECTOR_SIZE))
+        .context("seek entry data")?;
+    let mut hasher = md5::Context::new();
+    let mut remaining = size;
+    let mut buf = vec![0u8; BUF];
+    while remaining > 0 {
+        let n = (remaining as usize).min(BUF);
+        source
+            .read_exact(&mut buf[..n])
+            .context("read entry data")?;
+        hasher.consume(&buf[..n]);
+        remaining -= n as u64;
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+/// Display form of an image-internal path: `/` separators, no leading slash
+/// (xdvdfs style: `/sub/b.txt`).
+fn display_path(path: &str) -> String {
+    path.replace('\\', "/").trim_matches('/').to_string()
+}
+
+/// Per-file MD5 digests for an already-parsed XISO image, in sorted
+/// display-path order. Directories are skipped: table layouts differ
+/// between tools by design, so only file contents (which must match)
+/// are hashed.
+pub fn md5_iso(info: &crate::iso::IsoInfo) -> Result<Vec<(String, String)>> {
+    use anyhow::Context as _;
+    let base = crate::write::format::iso_type_offset(&info.iso_type);
+    let mut entries: Vec<&crate::iso::IsoEntry> =
+        info.entries.iter().filter(|e| !e.is_dir).collect();
+    entries.sort_by_key(|e| display_path(&e.path));
+    let mut source =
+        File::open(&info.file_path).with_context(|| format!("open {} for md5", info.file_path))?;
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
+        let digest = md5_entry_bytes(&mut source, base, e.sector, e.size)?;
+        out.push((display_path(&e.path), digest));
+    }
+    Ok(out)
+}
+
+/// Deterministic SHA256 over an image's file contents: file bytes
+/// concatenated in sorted display-path order. Same inputs always give
+/// the same value regardless of container layout, so it detects content
+/// drift between rebuilds. Values are x360-rs-specific (not comparable
+/// with xdvdfs `checksum`, which folds in table metadata).
+pub fn checksum_iso(info: &crate::iso::IsoInfo) -> Result<String> {
+    use anyhow::Context as _;
+    use sha2::Digest as _;
+    const BUF: usize = 1024 * 1024;
+    let base = crate::write::format::iso_type_offset(&info.iso_type);
+    let mut entries: Vec<&crate::iso::IsoEntry> =
+        info.entries.iter().filter(|e| !e.is_dir).collect();
+    entries.sort_by_key(|e| display_path(&e.path));
+    let mut source = File::open(&info.file_path)
+        .with_context(|| format!("open {} for checksum", info.file_path))?;
+    let mut hasher = sha2::Sha256::new();
+    let mut buf = vec![0u8; BUF];
+    for e in entries {
+        source
+            .seek(SeekFrom::Start(base + e.sector as u64 * SECTOR_SIZE))
+            .context("seek entry data")?;
+        let mut remaining = e.size;
+        while remaining > 0 {
+            let n = (remaining as usize).min(BUF);
+            source
+                .read_exact(&mut buf[..n])
+                .context("read entry data")?;
+            hasher.update(&buf[..n]);
+            remaining -= n as u64;
+        }
+    }
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
+}
 pub(crate) fn sanitize_dir_name(name: &str) -> String {
     name.chars()
         .map(|c| match c {
