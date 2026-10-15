@@ -26,7 +26,8 @@ use crate::parse::{parse_file, parse_game_dir, parse_iso};
 use crate::render::{emit, report_summary};
 use crate::report::Report;
 use crate::stfs::{extract_report, open_stfs_reader, verify_stfs};
-use crate::write::{create_xiso_from_dir_with_progress, create_xiso_from_parsed_with_progress};
+use crate::write::{create_xiso_from_dir_with_progress, create_xiso_from_mapped_dir_with_progress};
+use crate::write::{create_xiso_from_parsed_with_progress, remap::parse_map_rule};
 
 fn detect_output_format(iso_type: &str) -> crate::write::format::OutputFormat {
     match iso_type {
@@ -219,15 +220,32 @@ fn main() -> Result<()> {
                 eprintln!("{m}");
             }
         };
-        create_xiso_from_dir_with_progress(
-            dir,
-            &out_path,
-            fmt,
-            &log,
-            &progress,
-            args.skip_systemupdate,
-        )?;
-        if !args.quiet {
+        if args.map.is_empty() && !args.dry_run {
+            create_xiso_from_dir_with_progress(
+                dir,
+                &out_path,
+                fmt,
+                &log,
+                &progress,
+                args.skip_systemupdate,
+            )?;
+        } else {
+            let mut rules = Vec::with_capacity(args.map.len());
+            for rule in &args.map {
+                rules.push(parse_map_rule(rule)?);
+            }
+            create_xiso_from_mapped_dir_with_progress(
+                dir,
+                &out_path,
+                fmt,
+                &log,
+                &progress,
+                args.skip_systemupdate,
+                &rules,
+                args.dry_run,
+            )?;
+        }
+        if !args.quiet && !args.dry_run {
             eprintln!("created {} from {}", out_path.display(), dir.display());
         }
         return Ok(());

@@ -95,6 +95,8 @@ x360-rs file --show-entries --show-strings -v
 | `--bench-extract-iso` | Benchmark all XISO extraction methods, report fastest |
 | `--optimize` | Rebuild XISO with contiguous sectors (removes padding); uses `-o` as destination; `--in-place` overwrites with `.bak` backup; `--verify-output` re-parses and compares |
 | `--create <DIR>` | Build a new XISO from an extracted game directory; uses `-o` as destination |
+| `-m, --map <RULE>` | With `--create`: map host paths to image paths (same as xdvdfs `build-image -m`); repeatable; `"host/path:image/path"` with glob + `{n}` captures, or `"!host/path"` to exclude; unmatched files are not packed |
+| `--dry-run` | With `--create`: list what would be packed without writing the image |
 | `--create-format <xsf\|xgd2\|xgd3\|xgd1>` | Output image format for `--create` (default: `xsf`); `--optimize` produces `xsf` unless `--preserve-format` is given |
 | `--in-place` | With `--optimize`: overwrite input (backup to `.bak.iso` first, restore on failure) |
 | `--preserve-format` | With `--optimize`: keep the input format (`xgd3`/`xgd2`/`xgd1`) instead of default `xsf` output (advanced; larger files) |

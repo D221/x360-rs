@@ -142,6 +142,18 @@ pub(crate) struct Args {
     #[arg(short = 'q', long, conflicts_with = "verbose")]
     pub quiet: bool,
 
+    /// Map host paths to image paths when creating (same as xdvdfs
+    /// build-image -m). Repeatable. Form "host/path:image/path" with glob
+    /// and {n} capture substitution, or "!host/path" to exclude.
+    /// Unmatched files are not packed.
+    #[arg(short = 'm', long, value_name = "RULE", requires = "create")]
+    pub map: Vec<String>,
+
+    /// List what --create would pack without writing the image
+    /// (same as xdvdfs build-image -D).
+    #[arg(long, requires = "create")]
+    pub dry_run: bool,
+
     /// Preserve the original XISO format (XGD3, XGD2, XGD1) during optimization.
     /// By default, --optimize produces XSF (smallest file, same as extract-xiso).
     /// This is an advanced option; use with caution.

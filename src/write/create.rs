@@ -9,6 +9,7 @@ use crate::write::dirtab::{
 };
 use crate::write::format::OutputFormat;
 use crate::write::img::create_xiso_from_arena_with_progress;
+use crate::write::remap::{build_tree_from_mapping, MapRule};
 
 /// Convenience wrapper without progress reporting (the CLI uses
 /// [`create_xiso_from_dir_with_progress`]).
@@ -40,6 +41,63 @@ pub fn create_xiso_from_dir_with_progress(
     }
 
     let mut arena = build_tree_from_dir_arena(dir, output, skip_systemupdate)?;
+    calculate_arena_sizes(&mut arena);
+    check_duplicates_arena(&arena)?;
+
+    create_xiso_from_arena_with_progress(arena, None, 0, output, fmt, 0, log, progress)
+}
+
+/// Create with host-to-image map rules (same as xdvdfs `build-image -m`).
+/// With no rules this behaves exactly like
+/// [`create_xiso_from_dir_with_progress`]. When `dry_run` is set, the
+/// `host -> image` mapping is printed and no image is written.
+#[allow(clippy::too_many_arguments)]
+pub fn create_xiso_from_mapped_dir_with_progress(
+    dir: &Path,
+    output: &Path,
+    fmt: OutputFormat,
+    log: &dyn Fn(String),
+    progress: &dyn Fn(String),
+    skip_systemupdate: bool,
+    rules: &[MapRule],
+    dry_run: bool,
+) -> Result<()> {
+    if !dir.is_dir() {
+        anyhow::bail!("not a directory: {}", dir.display());
+    }
+
+    let mut arena = if rules.is_empty() {
+        let plain = build_tree_from_dir_arena(dir, output, skip_systemupdate)?;
+        if dry_run {
+            let mut names: Vec<String> = plain
+                .iter()
+                .flat_map(|n| {
+                    n.entries.iter().map(|e| {
+                        if n.path.as_os_str().is_empty() {
+                            e.name.clone()
+                        } else {
+                            format!("{}/{}", n.path.display(), e.name)
+                        }
+                    })
+                })
+                .collect();
+            names.sort();
+            for name in names {
+                println!("{name}");
+            }
+            return Ok(());
+        }
+        plain
+    } else {
+        let (mapped, pairs) = build_tree_from_mapping(dir, output, skip_systemupdate, rules)?;
+        for (host, image) in &pairs {
+            println!("{host} -> /{image}");
+        }
+        mapped
+    };
+    if dry_run {
+        return Ok(());
+    }
     calculate_arena_sizes(&mut arena);
     check_duplicates_arena(&arena)?;
 

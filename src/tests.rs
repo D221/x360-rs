@@ -644,6 +644,87 @@ fn test_copy_out_single_file_and_subtree() {
 }
 
 #[test]
+fn test_map_rule_parsing_rejects_bad_rules() {
+    use crate::write::remap::parse_map_rule;
+    assert!(parse_map_rule("docs:/manual").is_ok());
+    assert!(parse_map_rule("!secret").is_ok());
+    assert!(parse_map_rule("bareword").is_err());
+    assert!(parse_map_rule(":empty").is_err());
+}
+
+#[test]
+fn test_mapped_create_relocates_prefix_and_excludes() {
+    use crate::write::create::create_xiso_from_mapped_dir_with_progress;
+    use crate::write::format::OutputFormat as XisoFormat;
+    use crate::write::remap::parse_map_rule;
+    let dir = std::env::temp_dir().join(format!("tu_map_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("docs")).unwrap();
+    std::fs::create_dir_all(dir.join("secret")).unwrap();
+    std::fs::write(dir.join("docs").join("a.txt"), b"aaa").unwrap();
+    std::fs::write(dir.join("secret").join("s.txt"), b"sss").unwrap();
+    std::fs::write(dir.join("top.txt"), b"top").unwrap();
+    let rules = [
+        parse_map_rule("docs:/manual").unwrap(),
+        parse_map_rule("!secret").unwrap(),
+        parse_map_rule("top.txt:/top.txt").unwrap(),
+    ];
+    let out = std::env::temp_dir().join(format!("tu_map_{}.iso", std::process::id()));
+    create_xiso_from_mapped_dir_with_progress(
+        &dir,
+        &out,
+        XisoFormat::Xsf,
+        &(|_| ()),
+        &(|_| ()),
+        false,
+        &rules,
+        false,
+    )
+    .expect("mapped create writes");
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let info = parse_iso(&out, out_size).expect("output re-parses");
+    let mut paths: Vec<String> = info
+        .entries
+        .iter()
+        .map(|e| e.path.replace('\\', "/"))
+        .collect();
+    paths.sort();
+    // Prefix rule pulls the subtree; negation drops secret; unmatched top
+    // rule keeps top.txt.
+    assert!(paths.iter().any(|p| p.ends_with("manual/a.txt")));
+    assert!(!paths.iter().any(|p| p.contains("secret")));
+    assert!(paths.iter().any(|p| p.ends_with("top.txt")));
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_mapped_dry_run_writes_nothing() {
+    use crate::write::create::create_xiso_from_mapped_dir_with_progress;
+    use crate::write::format::OutputFormat as XisoFormat;
+    use crate::write::remap::parse_map_rule;
+    let dir = std::env::temp_dir().join(format!("tu_mapdry_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.txt"), b"aaa").unwrap();
+    let rules = [parse_map_rule("a.txt:/a.txt").unwrap()];
+    let out = std::env::temp_dir().join(format!("tu_mapdry_{}.iso", std::process::id()));
+    create_xiso_from_mapped_dir_with_progress(
+        &dir,
+        &out,
+        XisoFormat::Xsf,
+        &(|_| ()),
+        &(|_| ()),
+        false,
+        &rules,
+        true,
+    )
+    .expect("dry run ok");
+    assert!(!out.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_is_systemupdate_path_matches() {
     use crate::iso::is_systemupdate_path;
     assert!(is_systemupdate_path("$SystemUpdate"));

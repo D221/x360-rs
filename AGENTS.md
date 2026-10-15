@@ -36,7 +36,7 @@ Binary output: target/release/x360-rs (.exe on Windows)
 ## Project Structure
 
 tu_parser/
-├── Cargo.toml          # deps: anyhow, byteorder, clap 4 (derive), serde, sha1 (STFS), md5 + sha3 (hash commands)
+├── Cargo.toml          # deps: anyhow, byteorder, clap 4 (derive), serde, sha1 (STFS), md5 + sha3 (hash commands), wax (map rules)
 ├── Cargo.lock
 ├── LICENSE (MIT)
 ├── README.md           # update the Options table when adding CLI flags
@@ -90,7 +90,7 @@ Design docs (not in this dir): `../docs/superpowers/specs/` + `../docs/superpowe
 - Directory sweep (--dir --recursive): unrecognized files warn and continue (e.g., GOD DataNNNN parts)
 - XISO optimize (--optimize): two-pass rebuild with contiguous sectors from 33; outputs **XSF by default** (smallest, same as extract-xiso); `--preserve-format` keeps input format (XGD3/XGD2/XGD1, larger files due to format offset); inputs already tagged optimized by extract-xiso (`in!xiso!` at file offset 31337) are skipped with a message; `--in-place` creates .bak backup with restore-on-failure; `--verify-output` re-parses and compares entries. Outputs carry **no** `in!xiso!` tag (pure).
 - Directory tables are written as balanced BST layout (`dirtab.rs::layout_table`), not right-linked lists; readers must tree-walk. Unresolvable directory `child_index` in `img.rs` is a hard `bail!` (no silent fallback) - a failed optimize leaves no output, never a corrupt one.
-- XISO create (--create DIR -o out.iso --create-format xsf): walks directory, streams file bytes from disk; symlinks rejected
+- XISO create (--create DIR -o out.iso --create-format xsf): walks directory, streams file bytes from disk; symlinks rejected; `-m/--map` host→image rules with wax globs + `{n}` captures + `!` exclusions (same as xdvdfs `build-image -m`, see `write/remap.rs`); `--dry-run` lists without writing
 - `-s/--skip-systemupdate`: drops top-level `$SystemUpdate` in extract, optimize and create (same as extract-xiso `-s`); matcher is `iso.rs::is_systemupdate_path` (first path component, case-insensitive)
 - `-q/--quiet` (conflicts with `-v`): silences console progress and reports; warnings/errors still print; `--output` file is still written
 - Warnings (`warning: ...`) must stay visible - never hide skips/fallbacks behind quiet or verbose gates
