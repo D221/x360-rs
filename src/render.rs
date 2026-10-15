@@ -13,6 +13,14 @@ pub(crate) fn report_summary(report: &Report) -> String {
         Report::Xiso(i) => format!("XISO {} ({} entries)", i.iso_type, i.entries.len()),
         Report::Xex(i) => format!("XEX {}", i.exec.title_id),
         Report::Xbe(i) => format!("XBE {}", i.info.title_id),
+        Report::Xdbf(i) => format!(
+            "XDBF {} resources{}",
+            i.num_entries,
+            i.title_name
+                .as_ref()
+                .map(|t| format!(" ({t})"))
+                .unwrap_or_default()
+        ),
         Report::GameDir(i) => format!("game dir ({} files)", i.files),
     }
 }
@@ -209,6 +217,25 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 "XBE: title {} version {}\n",
                 info.info.title_id, info.info.version
             ));
+            out.push('\n');
+        }
+        Report::Xdbf(info) => {
+            out.push_str(&format!("=== {} ===\n", info.file_path));
+            out.push_str(&format!("File size: {}\n", format_size(info.file_size)));
+            out.push_str(&format!(
+                "Format: XDBF title database (magic {}, version {})\n",
+                info.magic, info.version
+            ));
+            match &info.title_name {
+                Some(t) => out.push_str(&format!("Title: {t}\n")),
+                None => out.push_str("Title: not found\n"),
+            }
+            let rows: Vec<(&str, u64, u64, bool)> = info
+                .entries
+                .iter()
+                .map(|e| (e.resource.as_str(), e.offset, e.size, false))
+                .collect();
+            render_entries(&mut out, &rows, show_entries);
             out.push('\n');
         }
         Report::GameDir(info) => {

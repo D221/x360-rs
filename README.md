@@ -94,6 +94,7 @@ x360-rs file --show-entries --show-strings -v
 | `--checksum` | Print a deterministic content checksum identical to xdvdfs `checksum` (SHA3-256 over sorted `/path` keys plus file bytes) |
 | `--bench-extract-iso` | Benchmark all XISO extraction methods, report fastest |
 | `--optimize` | Rebuild XISO with contiguous sectors (removes padding); uses `-o` as destination; `--in-place` overwrites with `.bak` backup; `--verify-output` re-parses and compares |
+| `--truncate` | Drop trailing sectors past the last used one (Iso2God "Partial" equivalent); preserves layout and format byte-for-byte; uses `-o` as destination |
 | `--create <DIR>` | Build a new XISO from an extracted game directory; uses `-o` as destination |
 | `-m, --map <RULE>` | With `--create`: map host paths to image paths (same as xdvdfs `build-image -m`); repeatable; `"host/path:image/path"` with glob + `{n}` captures, or `"!host/path"` to exclude; unmatched files are not packed |
 | `--dry-run` | With `--create`: list what would be packed without writing the image |

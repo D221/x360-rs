@@ -100,10 +100,28 @@ pub(crate) struct Args {
             "dir",
             "extract",
             "extract_iso",
-            "bench_extract_iso"
+            "bench_extract_iso",
+            "truncate"
         ]
     )]
     pub optimize: bool,
+
+    /// Truncate an XISO past its last used sector (Iso2God "Partial"
+    /// equivalent). Preserves the original layout and format byte-for-byte;
+    /// only trailing padding is dropped. Uses `-o/--output` as destination.
+    #[arg(
+        long,
+        conflicts_with_all = [
+            "create",
+            "game_dir",
+            "dir",
+            "extract",
+            "extract_iso",
+            "bench_extract_iso",
+            "optimize"
+        ]
+    )]
+    pub truncate: bool,
 
     /// Create a new XISO from an extracted game directory.
     /// Uses `-o/--output` as the destination ISO path.
@@ -128,7 +146,7 @@ pub(crate) struct Args {
     pub create_format: crate::write::format::OutputFormat,
 
     /// Overwrite input file in place (creates a .bak backup first).
-    #[arg(long, requires = "optimize")]
+    #[arg(long)]
     pub in_place: bool,
 
     /// Skip the $SystemUpdate folder during extract, optimize and create
@@ -165,8 +183,9 @@ pub(crate) struct Args {
     #[arg(long)]
     pub no_media_patch: bool,
 
-    /// Re-parse the optimized output and verify entry fidelity.
-    #[arg(long, requires = "optimize")]
+    /// Re-parse the output and verify entry fidelity (with --optimize or
+    /// --truncate).
+    #[arg(long)]
     pub verify_output: bool,
 
     /// Print parse progress to stderr.

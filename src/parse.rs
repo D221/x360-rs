@@ -61,6 +61,11 @@ pub fn parse_file(path: &PathBuf) -> Result<Report> {
         drop(reader);
         return Ok(Report::Xiso(parse_iso(path, file_size)?));
     }
+    // XDBF has no fixed magic: structural probe last (strict validation).
+    drop(reader);
+    if let Ok(xdbf) = crate::xdbf::parse_xdbf(path, file_size) {
+        return Ok(Report::Xdbf(crate::xdbf::report_info(&xdbf)));
+    }
     Err(TuError::UnknownFormat.into())
 }
 

@@ -727,6 +727,117 @@ fn test_mapped_dry_run_writes_nothing() {
 }
 
 #[test]
+fn test_xdbf_parses_entries_and_title() {
+    use crate::xdbf::{parse_xdbf, resource_name};
+    let dir = std::env::temp_dir().join(format!("tu_xdbf_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Header (24B) + 6B gap + 2x18B entries + data region.
+    let mut blob = Vec::new();
+    blob.extend_from_slice(b"XDBF");
+    blob.extend_from_slice(&1u16.to_be_bytes());
+    blob.extend_from_slice(&0u16.to_be_bytes());
+    blob.extend_from_slice(&2u32.to_be_bytes());
+    blob.extend_from_slice(&2u32.to_be_bytes());
+    blob.extend_from_slice(&0u32.to_be_bytes());
+    blob.extend_from_slice(&0u32.to_be_bytes());
+    blob.extend_from_slice(&[0u8; 6]);
+    // Entry 0: identifier 1, type 3 (title), data "xx"+len+name.
+    // First byte nonzero so the zero-padding skip stops at the data start.
+    let mut title_data = vec![0xAAu8];
+    title_data.extend_from_slice(&[0u8; 16]);
+    title_data.push(9);
+    title_data.extend_from_slice(b"Test Game");
+    // Entry 1: XACH achievement blob.
+    let ach = b"achievement-bytes";
+    let off0 = 0u32;
+    let off1 = title_data.len() as u32;
+    for (id, ty, off, size) in [
+        (1u32, 3u16, off0, title_data.len() as u32),
+        (0x58414348, 2, off1, ach.len() as u32),
+    ] {
+        blob.extend_from_slice(&id.to_be_bytes());
+        blob.extend_from_slice(&off.to_be_bytes());
+        blob.extend_from_slice(&size.to_be_bytes());
+        blob.extend_from_slice(&ty.to_be_bytes());
+        blob.extend_from_slice(&0u32.to_be_bytes());
+    }
+    blob.extend_from_slice(&title_data);
+    blob.extend_from_slice(ach);
+    let path = dir.join("test.xdbf");
+    std::fs::write(&path, &blob).unwrap();
+    let info = parse_xdbf(&path, blob.len() as u64).expect("parses");
+    assert_eq!(info.num_entries, 2);
+    assert_eq!(info.title_name.as_deref(), Some("Test Game"));
+    assert_eq!(resource_name(0x58414348, 2), "XACH/Achievement");
+    assert_eq!(resource_name(1, 3), "00000001/TitleInfo");
+    // Report conversion carries file offsets.
+    let rep = crate::xdbf::report_info(&info);
+    assert_eq!(rep.entries.len(), 2);
+    assert!(rep.entries[0].offset >= 30 + 2 * 18);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_xdbf_rejects_garbage() {
+    use crate::xdbf::parse_xdbf;
+    let dir = std::env::temp_dir().join(format!("tu_xdbfbad_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Mismatched entry counts.
+    let mut bad = vec![0u8; 64];
+    bad[0..4].copy_from_slice(b"XDBF");
+    bad[8..12].copy_from_slice(&2u32.to_be_bytes());
+    bad[12..16].copy_from_slice(&3u32.to_be_bytes());
+    let path = dir.join("bad.xdbf");
+    std::fs::write(&path, &bad).unwrap();
+    assert!(parse_xdbf(&path, 64).is_err());
+    // Random small file.
+    let tiny = dir.join("tiny.bin");
+    std::fs::write(&tiny, b"hello world, this is not xdbf data!!").unwrap();
+    assert!(parse_xdbf(&tiny, 36).is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_truncate_drops_only_trailing_padding() {
+    use crate::write::format::OutputFormat as XisoFormat;
+    use crate::write::truncate::{last_used_sector, truncate_iso_to_last_used};
+    let dir = std::env::temp_dir().join(format!("tu_trunc_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("a.txt"), b"aaa").unwrap();
+    let base = std::env::temp_dir().join(format!("tu_trunc_{}.iso", std::process::id()));
+    crate::write::create_xiso_from_dir(&dir, &base, XisoFormat::Xsf, &(|_| ()))
+        .expect("create writes");
+    // Append 1 MiB of trailing garbage like an unoptimized image would have.
+    let padded = std::env::temp_dir().join(format!("tu_trunc_{}_pad.iso", std::process::id()));
+    let mut data = std::fs::read(&base).unwrap();
+    let clean_len = data.len();
+    data.extend_from_slice(&vec![0u8; 1024 * 1024]);
+    std::fs::write(&padded, &data).unwrap();
+    let info = parse_iso(&padded, data.len() as u64).expect("parses");
+    let last = last_used_sector(&info);
+    assert!((last as u64 * 2048) <= clean_len as u64);
+    let out = std::env::temp_dir().join(format!("tu_trunc_{}_out.iso", std::process::id()));
+    let out_size = truncate_iso_to_last_used(&padded, &out, &info).expect("truncates");
+    assert!(out_size < data.len() as u64);
+    // Layout preserved: same entries, same sectors, same bytes.
+    let out_info = parse_iso(&out, out_size).expect("re-parses");
+    assert_eq!(out_info.entries.len(), info.entries.len());
+    for (a, b) in info.entries.iter().zip(out_info.entries.iter()) {
+        assert_eq!(a.path, b.path);
+        assert_eq!(a.sector, b.sector);
+        assert_eq!(a.size, b.size);
+    }
+    assert!(crate::verify_optimize_fidelity(&info, &out_info, false).is_ok());
+    for f in [&base, &padded, &out] {
+        let _ = std::fs::remove_file(f);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_media_patch_rewrites_pattern_bytes() {
     use crate::write::img::{is_xbe_file, patch_media_enable};
     assert!(is_xbe_file("default.xbe"));

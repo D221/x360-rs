@@ -52,6 +52,26 @@ pub struct XbeFileInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XdbfFileInfo {
+    pub file_path: String,
+    pub file_size: u64,
+    pub magic: String,
+    pub version: u16,
+    pub num_entries: u32,
+    pub title_name: Option<String>,
+    pub entries: Vec<XdbfEntryInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XdbfEntryInfo {
+    pub identifier: String,
+    pub resource: String,
+    pub offset: u64,
+    pub size: u64,
+    pub entry_type: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameDirInfo {
     pub dir_path: String,
     pub files: u64,
@@ -63,7 +83,7 @@ pub struct GameDirInfo {
 }
 
 /// Top-level report. Internally tagged, so JSON gains a `"type"` field:
-/// `stfs`, `xiso`, `xex`, `xbe` or `gamedir`.
+/// `stfs`, `xiso`, `xex`, `xbe`, `xdbf` or `gamedir`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Report {
@@ -71,5 +91,6 @@ pub enum Report {
     Xiso(IsoInfo),
     Xex(XexFileInfo),
     Xbe(XbeFileInfo),
+    Xdbf(XdbfFileInfo),
     GameDir(GameDirInfo),
 }

@@ -14,6 +14,7 @@ mod tests;
 mod tu_header;
 mod tu_parser;
 mod write;
+mod xdbf;
 mod xex;
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -82,6 +83,38 @@ fn optimize_one(
         let out_info = parse_iso(&out.to_path_buf(), out_meta.len())?;
         verify_optimize_fidelity(info, &out_info, !args.no_media_patch).with_context(|| {
             format!("optimized output verification failed for {}", out.display())
+        })?;
+        if args.verbose {
+            eprintln!("verified {}", out.display());
+        }
+    }
+    Ok(())
+}
+
+fn truncate_one(
+    src: &std::path::Path,
+    out: &std::path::Path,
+    info: &crate::iso::IsoInfo,
+    args: &Args,
+) -> Result<()> {
+    let out_size = crate::write::truncate::truncate_iso_to_last_used(src, out, info)?;
+    if args.verbose {
+        eprintln!(
+            "truncated {} -> {} ({} bytes)",
+            src.display(),
+            out.display(),
+            out_size
+        );
+    }
+    if args.verify_output {
+        let out_info = parse_iso(
+            &out.to_path_buf(),
+            std::fs::metadata(out)
+                .with_context(|| format!("cannot stat {}", out.display()))?
+                .len(),
+        )?;
+        verify_optimize_fidelity(info, &out_info, false).with_context(|| {
+            format!("truncated output verification failed for {}", out.display())
         })?;
         if args.verbose {
             eprintln!("verified {}", out.display());
@@ -204,6 +237,13 @@ fn compare_iso_file_bytes(
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.verify_output && !(args.optimize || args.truncate) {
+        anyhow::bail!("--verify-output requires --optimize or --truncate");
+    }
+    if args.in_place && !(args.optimize || args.truncate) {
+        anyhow::bail!("--in-place requires --optimize or --truncate");
+    }
 
     // Copy-out mode: copy a single file or directory out of one XISO image
     // (same as xdvdfs copy-out). Returns before the parse sweep so the
@@ -382,6 +422,62 @@ fn main() -> Result<()> {
         }
         if failures > 0 {
             anyhow::bail!("{failures} file(s) failed to optimize");
+        }
+        return Ok(());
+    }
+
+    // Truncate mode: drop trailing sectors past the last used one,
+    // preserving layout and format (Iso2God "Partial" equivalent).
+    if args.truncate {
+        if args.files.is_empty() {
+            anyhow::bail!("no input: pass FILES with --truncate");
+        }
+        if args.output.is_some() && args.files.len() > 1 && !args.in_place {
+            anyhow::bail!("--output with multiple inputs requires --in-place");
+        }
+        let mut failures: u64 = 0;
+        for input in &args.files {
+            let result = (|| -> Result<()> {
+                let meta = std::fs::metadata(input)
+                    .with_context(|| format!("cannot stat {}", input.display()))?;
+                let info = parse_iso(input, meta.len())?;
+                if args.in_place {
+                    let backup = input.with_extension("bak.iso");
+                    std::fs::rename(input, &backup).with_context(|| {
+                        format!("cannot back up {} to {}", input.display(), backup.display())
+                    })?;
+                    match truncate_one(&backup, input, &info, &args) {
+                        Ok(()) => {
+                            std::fs::remove_file(&backup).ok();
+                            Ok(())
+                        }
+                        Err(e) => {
+                            // Restore original on failure.
+                            restore_backup(&backup, input);
+                            Err(e)
+                        }
+                    }
+                } else {
+                    let out = args
+                        .output
+                        .clone()
+                        .unwrap_or_else(|| input.with_extension("trunc.iso"));
+                    if out == *input {
+                        anyhow::bail!(
+                            "source and destination are the same (use --in-place to overwrite)"
+                        );
+                    }
+                    truncate_one(input, &out, &info, &args)
+                }?;
+                Ok(())
+            })();
+            if let Err(e) = result {
+                failures += 1;
+                eprintln!("warning: truncate {}: {:#}", input.display(), e);
+            }
+        }
+        if failures > 0 {
+            anyhow::bail!("{failures} file(s) failed to truncate");
         }
         return Ok(());
     }

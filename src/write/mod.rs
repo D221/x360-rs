@@ -4,6 +4,7 @@ pub mod format;
 pub mod img;
 pub mod remap;
 pub mod sector;
+pub mod truncate;
 pub mod volume;
 #[allow(unused_imports)]
 pub use create::{
