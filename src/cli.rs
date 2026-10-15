@@ -93,6 +93,12 @@ pub(crate) struct Args {
     #[arg(long, requires = "optimize")]
     pub in_place: bool,
 
+    /// Preserve the original XISO format (XGD3, XGD2, XGD1) during optimization.
+    /// By default, --optimize produces XSF (smallest file, same as extract-xiso).
+    /// This is an advanced option; use with caution.
+    #[arg(long, requires = "optimize")]
+    pub preserve_format: bool,
+
     /// Re-parse the optimized output and verify entry fidelity.
     #[arg(long, requires = "optimize")]
     pub verify_output: bool,

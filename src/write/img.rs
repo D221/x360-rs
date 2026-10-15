@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use crate::iso::IsoInfo;
 use crate::write::dirtab::{
     build_dir_tree_from_entries, calculate_arena_sizes, check_duplicates_arena, flatten_tree,
-    ArenaNode,
+    layout_table, ArenaNode,
 };
 use crate::write::format::{iso_type_offset, sector_offset, OutputFormat};
 use crate::write::sector::{SectorAllocator, SECTOR_SIZE};
@@ -71,6 +71,9 @@ struct Writer<'a> {
     source_base: u64,
     output_base: u64,
     log: &'a dyn Fn(String),
+    progress: &'a dyn Fn(String),
+    total_files: u64,
+    files_done: u64,
 }
 
 impl Writer<'_> {
@@ -101,8 +104,21 @@ impl Writer<'_> {
                 let table_bytes_size =
                     self.arena[frame.node].table_size_sectors as usize * SECTOR_SIZE as usize;
                 let mut buffer = vec![0xFFu8; table_bytes_size];
-                let mut pos = 0usize;
                 let count = self.arena[frame.node].entries.len();
+                // Lay the table out as a case-insensitive binary search tree
+                // (root first at offset 0, no entry crossing a sector), the way
+                // extract-xiso does; the console finds files by tree search.
+                let layout = {
+                    let names: Vec<&str> = self.arena[frame.node]
+                        .entries
+                        .iter()
+                        .map(|e| e.name.as_str())
+                        .collect();
+                    layout_table(&names)
+                };
+                if layout.size_bytes as usize > buffer.len() {
+                    anyhow::bail!("directory table overflow");
+                }
                 for i in 0..count {
                     let sector = frame.entry_sectors[i];
                     let name = self.arena[frame.node].entries[i].name.clone();
@@ -115,25 +131,20 @@ impl Writer<'_> {
                     if name_bytes.len() > 255 {
                         anyhow::bail!("file name too long for GDF: {}", name);
                     }
+                    let pos = layout.offsets[i] as usize;
                     let entry_size = (14 + name_bytes.len() + 3) & !3;
                     if pos + entry_size > buffer.len() {
                         anyhow::bail!("directory table overflow");
                     }
-                    // Chain entries as a right-linked list (dword offsets from
-                    // the table start) so tree-walking readers visit every
-                    // entry; a table of all-zero offsets reads as one entry.
-                    // GDF offsets are u16, capping a table at 256 KiB.
-                    let right: u16 = if i + 1 < count {
-                        let next = (pos + entry_size) / 4;
-                        if next > u16::MAX as usize {
-                            anyhow::bail!("directory table too large for GDF offsets");
-                        }
-                        next as u16
-                    } else {
-                        0
-                    };
-                    buffer[pos] = 0;
-                    buffer[pos + 1] = 0;
+                    // GDF child offsets are u16 dword offsets (256 KiB cap).
+                    let left = u16::try_from(layout.left[i]).map_err(|_| {
+                        anyhow::anyhow!("directory table too large for GDF offsets")
+                    })?;
+                    let right = u16::try_from(layout.right[i]).map_err(|_| {
+                        anyhow::anyhow!("directory table too large for GDF offsets")
+                    })?;
+                    buffer[pos] = (left & 0xFF) as u8;
+                    buffer[pos + 1] = (left >> 8) as u8;
                     buffer[pos + 2] = (right & 0xFF) as u8;
                     buffer[pos + 3] = (right >> 8) as u8;
                     bytestore_u32_le(&mut buffer[pos + 4..pos + 8], sector);
@@ -141,7 +152,6 @@ impl Writer<'_> {
                     buffer[pos + 12] = attrs;
                     buffer[pos + 13] = name_bytes.len() as u8;
                     buffer[pos + 14..pos + 14 + name_bytes.len()].copy_from_slice(name_bytes);
-                    pos += entry_size;
                 }
 
                 self.output
@@ -248,6 +258,15 @@ impl Writer<'_> {
                 };
                 (self.log)(format!("FileAdded({}, {})", file_path, file_sector));
 
+                // Same cadence as extraction: every 50 files and the last one.
+                self.files_done += 1;
+                if self.files_done.is_multiple_of(50) || self.files_done == self.total_files {
+                    (self.progress)(format!(
+                        "  [{}/{}] {}",
+                        self.files_done, self.total_files, file_path
+                    ));
+                }
+
                 frames[last_idx].entry_sectors.push(file_sector);
                 frames[last_idx].entry_index += 1;
             }
@@ -257,11 +276,26 @@ impl Writer<'_> {
     }
 }
 
+/// Convenience wrapper without progress reporting (the CLI uses
+/// [`create_xiso_from_parsed_with_progress`]).
+#[allow(dead_code)]
 pub fn create_xiso_from_parsed(
     info: &IsoInfo,
     output: &Path,
     fmt: OutputFormat,
     log: &dyn Fn(String),
+) -> Result<()> {
+    create_xiso_from_parsed_with_progress(info, output, fmt, log, &|_| ())
+}
+
+/// Like [`create_xiso_from_parsed`], reporting progress through `progress`
+/// in the same style as extraction (a header line, then `[n/total] path`).
+pub fn create_xiso_from_parsed_with_progress(
+    info: &IsoInfo,
+    output: &Path,
+    fmt: OutputFormat,
+    log: &dyn Fn(String),
+    progress: &dyn Fn(String),
 ) -> Result<()> {
     if info.file_path.is_empty() {
         anyhow::bail!("IsoInfo has no source file path");
@@ -272,7 +306,7 @@ pub fn create_xiso_from_parsed(
     calculate_arena_sizes(&mut arena);
     check_duplicates_arena(&arena)?;
 
-    create_xiso_from_arena(
+    create_xiso_from_arena_with_progress(
         arena,
         Some(PathBuf::from(&info.file_path)),
         iso_type_offset(&info.iso_type),
@@ -280,12 +314,14 @@ pub fn create_xiso_from_parsed(
         fmt,
         info.volume_timestamp.unwrap_or(0),
         log,
+        progress,
     )
 }
 
 /// Image writer operating on a flattened arena (root at index 0).
+#[allow(dead_code)]
 pub fn create_xiso_from_arena(
-    mut arena: Vec<ArenaNode>,
+    arena: Vec<ArenaNode>,
     source_iso: Option<PathBuf>,
     source_base: u64,
     output: &Path,
@@ -293,9 +329,51 @@ pub fn create_xiso_from_arena(
     volume_timestamp: u64,
     log: &dyn Fn(String),
 ) -> Result<()> {
+    create_xiso_from_arena_with_progress(
+        arena,
+        source_iso,
+        source_base,
+        output,
+        fmt,
+        volume_timestamp,
+        log,
+        &|_| (),
+    )
+}
+
+/// Like [`create_xiso_from_arena`], with an extraction-style progress callback.
+#[allow(clippy::too_many_arguments)]
+pub fn create_xiso_from_arena_with_progress(
+    mut arena: Vec<ArenaNode>,
+    source_iso: Option<PathBuf>,
+    source_base: u64,
+    output: &Path,
+    fmt: OutputFormat,
+    volume_timestamp: u64,
+    log: &dyn Fn(String),
+    progress: &dyn Fn(String),
+) -> Result<()> {
     if arena.is_empty() {
         anyhow::bail!("empty directory tree");
     }
+
+    let total_files = arena
+        .iter()
+        .flat_map(|n| n.entries.iter())
+        .filter(|e| !e.is_dir)
+        .count() as u64;
+    let total_bytes: u64 = arena
+        .iter()
+        .flat_map(|n| n.entries.iter())
+        .filter(|e| !e.is_dir)
+        .map(|e| e.size)
+        .sum();
+    progress(format!(
+        "Packing {} files ({:.1} MB) to {}...",
+        total_files,
+        total_bytes as f64 / 1_048_576.0,
+        output.display()
+    ));
     let output_base = sector_offset(fmt);
 
     let mut source = match source_iso {
@@ -318,6 +396,9 @@ pub fn create_xiso_from_arena(
         source_base,
         output_base,
         log,
+        progress,
+        total_files,
+        files_done: 0,
     };
     let root_sector = writer.write_directory(0)?;
 

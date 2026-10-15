@@ -292,67 +292,155 @@ pub fn build_dir_tree_from_entries(entries: &[IsoEntry]) -> DirTreeNode {
     // indices in reverse guarantees that all descendants are moved into their
     // parent before the parent itself is moved.
     let total = nodes.len();
-    let mut nodes_opt: Vec<Option<DirTreeNode>> = nodes.into_iter().map(Some).collect();
 
-    // Move children into their parents (reverse order so descendants settle
-    // before parents), recording each (parent, global index, local position)
-    // triple for the remap below.
-    let mut remap: Vec<(usize, usize, usize)> = Vec::new();
+    // Entries hold global node indices. Convert them to local positions in
+    // the parent's `children` BEFORE any node is moved (after a node is moved
+    // into its parent it can no longer be reached to patch its entries).
+    // Local position matches the push order of the reverse move loop below.
+    let mut child_count = vec![0usize; total];
+    let mut local_of = vec![0usize; total];
     for idx in (1..total).rev() {
-        let parent_idx = parent_indices[idx].unwrap_or(0);
-        if let Some(parent) = nodes_opt[parent_idx].as_ref() {
-            remap.push((parent_idx, idx, parent.children.len()));
-        }
-        let child = nodes_opt[idx].take().expect("child node present");
-        if let Some(parent) = nodes_opt[parent_idx].as_mut() {
-            parent.children.push(child);
-        }
+        let p = parent_indices[idx].unwrap_or(0);
+        local_of[idx] = child_count[p];
+        child_count[p] += 1;
     }
-    // Resolve entries to local positions with one lookup per entry: entries
-    // still hold global indices here, and each entry is visited exactly
-    // once, so a remapped value can never match a second lookup. (Matching
-    // remap items against live entry values instead aliases remapped
-    // positions against pending globals — e.g. globals 1..4 remap to
-    // 3,2,1,0 and global 3's entry would then also match global 1.)
-    {
-        let mut maps: BTreeMap<usize, BTreeMap<usize, usize>> = BTreeMap::new();
-        for (parent_idx, global_idx, local_pos) in remap {
-            maps.entry(parent_idx)
-                .or_default()
-                .insert(global_idx, local_pos);
-        }
-        for (parent_idx, map) in &maps {
-            if let Some(parent) = nodes_opt[*parent_idx].as_mut() {
-                for entry in &mut parent.entries {
-                    if let Some(global_idx) = entry.child_index {
-                        if let Some(&local_pos) = map.get(&global_idx) {
-                            entry.child_index = Some(local_pos);
-                        }
-                    }
+    for node in nodes.iter_mut() {
+        for e in node.entries.iter_mut() {
+            if e.is_dir {
+                if let Some(g) = e.child_index {
+                    e.child_index = Some(local_of[g]);
                 }
             }
         }
     }
 
+    let mut nodes_opt: Vec<Option<DirTreeNode>> = nodes.into_iter().map(Some).collect();
+    for idx in (1..total).rev() {
+        let parent_idx = parent_indices[idx].unwrap_or(0);
+        let child = nodes_opt[idx].take().expect("child node present");
+        nodes_opt[parent_idx]
+            .as_mut()
+            .expect("parent node present")
+            .children
+            .push(child);
+    }
+
     nodes_opt[0].take().expect("root node present")
+}
+
+/// Byte-wise ASCII-uppercase comparison, matching extract-xiso's
+/// `avl_compare_key` (and the console's own lookup): case-insensitive,
+/// with a proper prefix sorting first.
+pub(crate) fn cmp_gdf_names(a: &str, b: &str) -> std::cmp::Ordering {
+    a.bytes()
+        .map(|c| c.to_ascii_uppercase())
+        .cmp(b.bytes().map(|c| c.to_ascii_uppercase()))
+}
+
+/// Physical layout of one GDF directory table.
+///
+/// A GDF table is a binary search tree: every entry carries dword offsets to
+/// its left/right child, and lookups start at byte offset 0 of the table.
+/// `offsets[i]`, `left[i]` and `right[i]` are indexed by the caller's entry
+/// index `i`; `left`/`right` are dword offsets (0 = no child, which is
+/// unambiguous because the root occupies offset 0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TableLayout {
+    pub offsets: Vec<u32>,
+    pub left: Vec<u32>,
+    pub right: Vec<u32>,
+    pub size_bytes: u32,
+}
+
+impl TableLayout {
+    pub fn size_sectors(&self) -> u32 {
+        if self.size_bytes == 0 {
+            1
+        } else {
+            self.size_bytes.div_ceil(2048)
+        }
+    }
+}
+
+/// Lay out a directory table for `names` (in the caller's entry order).
+///
+/// Names are ordered case-insensitively and arranged as a balanced binary
+/// search tree. Entries are stored in prefix (root, left, right) order so the
+/// root is first, and, as in extract-xiso, an entry that would straddle a
+/// 2048-byte sector boundary is moved to the start of the next sector.
+/// Iterative throughout (no recursion).
+pub(crate) fn layout_table<S: AsRef<str>>(names: &[S]) -> TableLayout {
+    let n = names.len();
+    let mut layout = TableLayout {
+        offsets: vec![0; n],
+        left: vec![0; n],
+        right: vec![0; n],
+        size_bytes: 0,
+    };
+    if n == 0 {
+        return layout;
+    }
+
+    let mut sorted: Vec<usize> = (0..n).collect();
+    sorted.sort_by(|&a, &b| cmp_gdf_names(names[a].as_ref(), names[b].as_ref()));
+
+    // Balanced BST over the sorted order, as child links between entry indices.
+    let mut lchild: Vec<Option<usize>> = vec![None; n];
+    let mut rchild: Vec<Option<usize>> = vec![None; n];
+    let mut root = None;
+    // (lo, hi, parent link): `Some((parent, is_left))` or None for the root.
+    let mut work: Vec<(usize, usize, Option<(usize, bool)>)> = vec![(0, n, None)];
+    while let Some((lo, hi, link)) = work.pop() {
+        if lo >= hi {
+            continue;
+        }
+        let mid = lo + (hi - lo) / 2;
+        let node = sorted[mid];
+        match link {
+            None => root = Some(node),
+            Some((p, true)) => lchild[p] = Some(node),
+            Some((p, false)) => rchild[p] = Some(node),
+        }
+        work.push((lo, mid, Some((node, true))));
+        work.push((mid + 1, hi, Some((node, false))));
+    }
+
+    // Prefix traversal assigns physical offsets.
+    let mut size = 0usize;
+    let mut stack = vec![root.expect("non-empty table has a root")];
+    while let Some(i) = stack.pop() {
+        let len = (14 + names[i].as_ref().len() + 3) & !3;
+        if (size + len).div_ceil(2048) > size.div_ceil(2048) {
+            size = size.div_ceil(2048) * 2048;
+        }
+        layout.offsets[i] = size as u32;
+        size += len;
+        if let Some(r) = rchild[i] {
+            stack.push(r);
+        }
+        if let Some(l) = lchild[i] {
+            stack.push(l);
+        }
+    }
+    for i in 0..n {
+        if let Some(l) = lchild[i] {
+            layout.left[i] = layout.offsets[l] / 4;
+        }
+        if let Some(r) = rchild[i] {
+            layout.right[i] = layout.offsets[r] / 4;
+        }
+    }
+    layout.size_bytes = size as u32;
+    layout
 }
 
 /// Calculate the GDF directory table size for an entry list, in sectors.
 ///
-/// Entry layout is 14 header bytes plus the name, padded to a 4-byte
-/// boundary (matching the parser and the writer).
+/// Uses the same layout the writer emits (14 header bytes plus the name,
+/// padded to 4 bytes, with no entry crossing a sector boundary).
 pub fn table_size_for_entries(entries: &[DirEntry]) -> u32 {
-    let mut size = 0usize;
-    for entry in entries {
-        let entry_bytes = 14 + entry.name.len();
-        let aligned = (entry_bytes + 3) & !3;
-        size += aligned;
-    }
-    if size == 0 {
-        1
-    } else {
-        size.div_ceil(2048) as u32
-    }
+    let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
+    layout_table(&names).size_sectors()
 }
 
 /// Flat, index-addressed view of a directory tree.
@@ -556,5 +644,91 @@ mod tests {
             assert_eq!(child.entries.len(), 1);
             assert_eq!(child.entries[0].name, "f.txt");
         }
+    }
+
+    /// Binary-search `name` the way the console does: start at offset 0,
+    /// compare case-insensitively, follow left/right dword offsets.
+    fn search(names: &[&str], layout: &TableLayout, name: &str) -> Option<usize> {
+        let by_off: std::collections::HashMap<u32, usize> = layout
+            .offsets
+            .iter()
+            .enumerate()
+            .map(|(i, &o)| (o, i))
+            .collect();
+        let mut cur = *by_off.get(&0)?;
+        loop {
+            match cmp_gdf_names(name, names[cur]) {
+                std::cmp::Ordering::Equal => return Some(cur),
+                std::cmp::Ordering::Less => {
+                    let o = layout.left[cur];
+                    if o == 0 {
+                        return None;
+                    }
+                    cur = *by_off.get(&(o * 4))?;
+                }
+                std::cmp::Ordering::Greater => {
+                    let o = layout.right[cur];
+                    if o == 0 {
+                        return None;
+                    }
+                    cur = *by_off.get(&(o * 4))?;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_layout_is_searchable_mixed_case() {
+        let names = [
+            "Zebra.txt",
+            "apple.txt",
+            "Banana.txt",
+            "cherry.txt",
+            "Apple2.txt",
+            "_x.txt",
+            "9lives.txt",
+            "Mid.txt",
+            "default.xex",
+        ];
+        let layout = layout_table(&names);
+        assert!(layout.offsets.contains(&0), "root must sit at offset 0");
+        for (i, n) in names.iter().enumerate() {
+            assert_eq!(search(&names, &layout, n), Some(i), "{n}");
+            assert_eq!(
+                search(&names, &layout, &n.to_ascii_uppercase()),
+                Some(i),
+                "{n}"
+            );
+        }
+        assert_eq!(search(&names, &layout, "nope.bin"), None);
+    }
+
+    #[test]
+    fn test_layout_large_table_no_sector_straddle() {
+        let owned: Vec<String> = (0..500)
+            .map(|i| format!("file_with_a_fairly_long_name_{i}.dat"))
+            .collect();
+        let names: Vec<&str> = owned.iter().map(|s| s.as_str()).collect();
+        let layout = layout_table(&names);
+        for (i, n) in names.iter().enumerate() {
+            let len = (14 + n.len() + 3) & !3;
+            let off = layout.offsets[i] as usize;
+            assert_eq!(
+                off / 2048,
+                (off + len - 1) / 2048,
+                "entry {i} straddles a sector"
+            );
+            assert_eq!(search(&names, &layout, n), Some(i));
+        }
+        assert!(layout.size_sectors() > 1);
+    }
+
+    #[test]
+    fn test_layout_empty_and_single() {
+        let none: [&str; 0] = [];
+        assert_eq!(layout_table(&none).size_sectors(), 1);
+        let one = layout_table(&["a"]);
+        assert_eq!(one.offsets, vec![0]);
+        assert_eq!((one.left[0], one.right[0]), (0, 0));
     }
 }

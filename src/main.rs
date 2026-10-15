@@ -24,7 +24,7 @@ use crate::parse::{parse_file, parse_game_dir, parse_iso};
 use crate::render::{emit, report_summary};
 use crate::report::Report;
 use crate::stfs::{extract_report, open_stfs_reader, verify_stfs};
-use crate::write::{create_xiso_from_dir, create_xiso_from_parsed};
+use crate::write::{create_xiso_from_dir_with_progress, create_xiso_from_parsed_with_progress};
 
 fn detect_output_format(iso_type: &str) -> crate::write::format::OutputFormat {
     match iso_type {
@@ -58,7 +58,7 @@ fn optimize_one(
             eprintln!("{m}");
         }
     };
-    create_xiso_from_parsed(info, out, fmt, &log)?;
+    create_xiso_from_parsed_with_progress(info, out, fmt, &log, &|m| eprintln!("{m}"))?;
     if args.verbose {
         eprintln!("optimized {} -> {}", src.display(), out.display());
     }
@@ -176,7 +176,7 @@ fn main() -> Result<()> {
                 eprintln!("{m}");
             }
         };
-        create_xiso_from_dir(dir, &out_path, fmt, &log)?;
+        create_xiso_from_dir_with_progress(dir, &out_path, fmt, &log, &|m| eprintln!("{m}"))?;
         eprintln!("created {} from {}", out_path.display(), dir.display());
         return Ok(());
     }
@@ -190,12 +190,42 @@ fn main() -> Result<()> {
             anyhow::bail!("--output with multiple inputs requires --in-place");
         }
         let mut failures: u64 = 0;
+        const XISO_OPTIMIZED_TAG_OFFSET: u64 = 31337;
+        const XISO_OPTIMIZED_TAG_MIN: &str = "in!xiso!";
         for input in &args.files {
             let result = (|| -> Result<()> {
                 let meta = std::fs::metadata(input)
                     .with_context(|| format!("cannot stat {}", input.display()))?;
                 let info = parse_iso(input, meta.len())?;
-                let fmt = detect_output_format(&info.iso_type);
+                let fmt = if args.preserve_format {
+                    detect_output_format(&info.iso_type)
+                } else {
+                    crate::write::format::OutputFormat::Xsf
+                };
+                // Check for extract-xiso "already optimized" tag at offset 31337.
+                let mut optimized_tag_found = false;
+                if meta.len()
+                    > XISO_OPTIMIZED_TAG_OFFSET as u64 + XISO_OPTIMIZED_TAG_MIN.len() as u64
+                {
+                    let mut file = std::fs::File::open(input).with_context(|| {
+                        format!("open {} for optimized tag check", input.display())
+                    })?;
+                    use std::io::{Read, Seek, SeekFrom};
+                    file.seek(SeekFrom::Start(XISO_OPTIMIZED_TAG_OFFSET))
+                        .context("seek tag offset")?;
+                    let mut buf = [0u8; 8];
+                    if file.read_exact(&mut buf).is_ok() {
+                        if std::str::from_utf8(&buf)
+                            .map_or(false, |s| s.starts_with(XISO_OPTIMIZED_TAG_MIN))
+                        {
+                            optimized_tag_found = true;
+                        }
+                    }
+                }
+                if optimized_tag_found {
+                    eprintln!("{} is already optimized, skipping...", input.display());
+                    return Ok(());
+                }
                 if args.in_place {
                     let backup = input.with_extension("bak.iso");
                     std::fs::rename(input, &backup).with_context(|| {

@@ -8,13 +8,28 @@ use crate::write::dirtab::{
     build_tree_from_dir_arena, calculate_arena_sizes, check_duplicates_arena,
 };
 use crate::write::format::OutputFormat;
-use crate::write::img::create_xiso_from_arena;
+use crate::write::img::create_xiso_from_arena_with_progress;
 
+/// Convenience wrapper without progress reporting (the CLI uses
+/// [`create_xiso_from_dir_with_progress`]).
+#[allow(dead_code)]
 pub fn create_xiso_from_dir(
     dir: &Path,
     output: &Path,
     fmt: OutputFormat,
     log: &dyn Fn(String),
+) -> Result<()> {
+    create_xiso_from_dir_with_progress(dir, output, fmt, log, &|_| ())
+}
+
+/// Like [`create_xiso_from_dir`], reporting progress through `progress` in the
+/// same style as extraction (a header line, then `[n/total] path`).
+pub fn create_xiso_from_dir_with_progress(
+    dir: &Path,
+    output: &Path,
+    fmt: OutputFormat,
+    log: &dyn Fn(String),
+    progress: &dyn Fn(String),
 ) -> Result<()> {
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
@@ -24,7 +39,7 @@ pub fn create_xiso_from_dir(
     calculate_arena_sizes(&mut arena);
     check_duplicates_arena(&arena)?;
 
-    create_xiso_from_arena(arena, None, 0, output, fmt, 0, log)
+    create_xiso_from_arena_with_progress(arena, None, 0, output, fmt, 0, log, progress)
 }
 
 #[cfg(test)]
