@@ -92,8 +92,11 @@ x360-rs file --show-entries --show-strings -v
 | `--bench-extract-iso` | Benchmark all XISO extraction methods, report fastest |
 | `--optimize` | Rebuild XISO with contiguous sectors (removes padding); uses `-o` as destination; `--in-place` overwrites with `.bak` backup; `--verify-output` re-parses and compares |
 | `--create <DIR>` | Build a new XISO from an extracted game directory; uses `-o` as destination |
-| `--create-format <xsf\|xgd2\|xgd3\|xgd1>` | Output image format for `--create` (default: `xsf`); `--optimize` preserves input format |
+| `--create-format <xsf\|xgd2\|xgd3\|xgd1>` | Output image format for `--create` (default: `xsf`); `--optimize` produces `xsf` unless `--preserve-format` is given |
 | `--in-place` | With `--optimize`: overwrite input (backup to `.bak.iso` first, restore on failure) |
+| `--preserve-format` | With `--optimize`: keep the input format (`xgd3`/`xgd2`/`xgd1`) instead of default `xsf` output (advanced; larger files) |
+| `-s, --skip-systemupdate` | Skip the `$SystemUpdate` folder during extract, optimize and create (same as extract-xiso `-s`) |
+| `-q, --quiet` | Suppress console output (progress, reports); warnings/errors still print, `--output` file still written (conflicts with `-v`) |
 | `--verify-output` | With `--optimize`: re-parse output and verify entry fidelity |
 | `-f, --format <text\|json>` | Output format (default: `text`) |
 | `-o, --output <FILE>` | Write output to a file instead of stdout |

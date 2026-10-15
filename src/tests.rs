@@ -570,6 +570,44 @@ fn test_zero_byte_file_does_not_truncate_table() {
 }
 
 #[test]
+fn test_is_systemupdate_path_matches() {
+    use crate::iso::is_systemupdate_path;
+    assert!(is_systemupdate_path("$SystemUpdate"));
+    assert!(is_systemupdate_path("$SystemUpdate/su20076000_00000000"));
+    assert!(is_systemupdate_path("$systemupdate\\system.manifest"));
+    assert!(!is_systemupdate_path("disk/bb.cpk"));
+    assert!(!is_systemupdate_path("default.xex"));
+    assert!(!is_systemupdate_path(""));
+}
+
+#[test]
+fn test_create_skips_systemupdate_when_flagged() {
+    use crate::write::dirtab::build_tree_from_dir_arena;
+    let dir = std::env::temp_dir().join(format!("tu_skipsu_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("$SystemUpdate")).unwrap();
+    std::fs::write(dir.join("$SystemUpdate").join("a.bin"), b"sys").unwrap();
+    std::fs::write(dir.join("default.xex"), b"game").unwrap();
+    let out = dir.join("skip.iso");
+    let full = build_tree_from_dir_arena(&dir, &out, false).unwrap();
+    let full_files: usize = full
+        .iter()
+        .flat_map(|n| n.entries.iter())
+        .filter(|e| !e.is_dir)
+        .count();
+    assert_eq!(full_files, 2);
+    let skipped = build_tree_from_dir_arena(&dir, &out, true).unwrap();
+    let kept: Vec<String> = skipped
+        .iter()
+        .flat_map(|n| n.entries.iter())
+        .filter(|e| !e.is_dir)
+        .map(|e| e.name.clone())
+        .collect();
+    assert_eq!(kept, vec!["default.xex".to_string()]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_written_tables_chain_entries_right() {
     use crate::write::format::OutputFormat as XisoFormat;
     // Tree-walking readers (extract-xiso, xdvdfs) follow right-child

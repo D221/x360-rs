@@ -50,11 +50,15 @@ pub(crate) fn sanitize_dir_name(name: &str) -> String {
 }
 
 /// Extract with a custom progress callback.
+///
+/// When `skip_systemupdate` is set, entries under `$SystemUpdate` are
+/// skipped (same as extract-xiso `-s`).
 pub fn extract_iso_fast_with_progress<F>(
     iso_path: &std::path::Path,
     out_dir: &std::path::Path,
     progress: F,
     title_id: Option<&str>,
+    skip_systemupdate: bool,
 ) -> Result<ExtractionResult>
 where
     F: Fn(String) + Send + Sync + 'static,
@@ -82,6 +86,9 @@ where
         0,
         &mut files,
     )?;
+    if skip_systemupdate {
+        files.retain(|e| !crate::iso::is_systemupdate_path(&e.path));
+    }
 
     let extract_files: Vec<ExtractFile> = files
         .iter()
@@ -156,5 +163,5 @@ pub fn extract_iso_fast(
     iso_path: &std::path::Path,
     out_dir: &std::path::Path,
 ) -> Result<ExtractionResult> {
-    extract_iso_fast_with_progress(iso_path, out_dir, |msg| eprintln!("{}", msg), None)
+    extract_iso_fast_with_progress(iso_path, out_dir, |msg| eprintln!("{}", msg), None, false)
 }

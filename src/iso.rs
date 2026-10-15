@@ -89,6 +89,18 @@ pub struct XbeInfo {
     pub version: String,
 }
 
+/// True when an entry path is the `$SystemUpdate` directory itself or lives
+/// under it (either separator, any case). Used by `--skip-systemupdate`
+/// (same as extract-xiso `-s`).
+pub fn is_systemupdate_path(path: &str) -> bool {
+    let first = path
+        .trim_matches(|c| c == '\\' || c == '/')
+        .split(['\\', '/'])
+        .next()
+        .unwrap_or("");
+    first.eq_ignore_ascii_case("$SystemUpdate")
+}
+
 /// Parse an original-Xbox XBE header: magic "XBEH", title ID LE u32 at +8,
 /// version LE u32 at +176 (iso2god-rs `TitleExecutionInfo::from_xbe`).
 pub fn parse_xbe_info(buf: &[u8]) -> Option<XbeInfo> {

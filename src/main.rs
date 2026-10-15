@@ -58,7 +58,11 @@ fn optimize_one(
             eprintln!("{m}");
         }
     };
-    create_xiso_from_parsed_with_progress(info, out, fmt, &log, &|m| eprintln!("{m}"))?;
+    create_xiso_from_parsed_with_progress(info, out, fmt, &log, &|m| {
+        if !args.quiet {
+            eprintln!("{m}");
+        }
+    })?;
     if args.verbose {
         eprintln!("optimized {} -> {}", src.display(), out.display());
     }
@@ -176,8 +180,23 @@ fn main() -> Result<()> {
                 eprintln!("{m}");
             }
         };
-        create_xiso_from_dir_with_progress(dir, &out_path, fmt, &log, &|m| eprintln!("{m}"))?;
-        eprintln!("created {} from {}", out_path.display(), dir.display());
+        let quiet = args.quiet;
+        let progress = move |m: String| {
+            if !quiet {
+                eprintln!("{m}");
+            }
+        };
+        create_xiso_from_dir_with_progress(
+            dir,
+            &out_path,
+            fmt,
+            &log,
+            &progress,
+            args.skip_systemupdate,
+        )?;
+        if !args.quiet {
+            eprintln!("created {} from {}", out_path.display(), dir.display());
+        }
         return Ok(());
     }
 
@@ -202,11 +221,19 @@ fn main() -> Result<()> {
                 } else {
                     crate::write::format::OutputFormat::Xsf
                 };
+                // Same as extract-xiso -s: drop $SystemUpdate before rebuilding.
+                let info = if args.skip_systemupdate {
+                    let mut filtered = info.clone();
+                    filtered
+                        .entries
+                        .retain(|e| !crate::iso::is_systemupdate_path(&e.path));
+                    filtered
+                } else {
+                    info
+                };
                 // Check for extract-xiso "already optimized" tag at offset 31337.
                 let mut optimized_tag_found = false;
-                if meta.len()
-                    > XISO_OPTIMIZED_TAG_OFFSET as u64 + XISO_OPTIMIZED_TAG_MIN.len() as u64
-                {
+                if meta.len() > XISO_OPTIMIZED_TAG_OFFSET + XISO_OPTIMIZED_TAG_MIN.len() as u64 {
                     let mut file = std::fs::File::open(input).with_context(|| {
                         format!("open {} for optimized tag check", input.display())
                     })?;
@@ -214,12 +241,11 @@ fn main() -> Result<()> {
                     file.seek(SeekFrom::Start(XISO_OPTIMIZED_TAG_OFFSET))
                         .context("seek tag offset")?;
                     let mut buf = [0u8; 8];
-                    if file.read_exact(&mut buf).is_ok() {
-                        if std::str::from_utf8(&buf)
-                            .map_or(false, |s| s.starts_with(XISO_OPTIMIZED_TAG_MIN))
-                        {
-                            optimized_tag_found = true;
-                        }
+                    if file.read_exact(&mut buf).is_ok()
+                        && std::str::from_utf8(&buf)
+                            .is_ok_and(|s| s.starts_with(XISO_OPTIMIZED_TAG_MIN))
+                    {
+                        optimized_tag_found = true;
                     }
                 }
                 if optimized_tag_found {
@@ -391,17 +417,25 @@ fn main() -> Result<()> {
                 if let Report::Xiso(ref info) = &other {
                     if let Some(outdir) = &args.extract_iso {
                         let title_id = info.xex_exec.as_ref().map(|x| x.title_id.as_str());
+                        let quiet = args.quiet;
                         match extract_iso_fast_with_progress(
                             file_path,
                             outdir,
-                            |msg| eprintln!("{}", msg),
+                            move |msg| {
+                                if !quiet {
+                                    eprintln!("{}", msg);
+                                }
+                            },
                             title_id,
+                            args.skip_systemupdate,
                         ) {
                             Ok(res) => {
-                                eprintln!(
-                                    "  extracted {} files ({:.1} MB/s) via {}",
-                                    res.files_extracted, res.throughput_mb_s, res.method
-                                );
+                                if !args.quiet {
+                                    eprintln!(
+                                        "  extracted {} files ({:.1} MB/s) via {}",
+                                        res.files_extracted, res.throughput_mb_s, res.method
+                                    );
+                                }
                             }
                             Err(e) => {
                                 failures += 1;
@@ -446,7 +480,11 @@ fn main() -> Result<()> {
         eprintln!("{failures} file(s) skipped");
     }
 
-    emit(&args, &all_results, args.show_entries, args.show_strings)?;
+    // Quiet mode suppresses the console report (still written to --output
+    // file when given); warnings and errors above always print.
+    if !(args.quiet && args.output.is_none()) {
+        emit(&args, &all_results, args.show_entries, args.show_strings)?;
+    }
     if verify_failed {
         std::process::exit(1);
     }

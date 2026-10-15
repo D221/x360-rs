@@ -19,23 +19,27 @@ pub fn create_xiso_from_dir(
     fmt: OutputFormat,
     log: &dyn Fn(String),
 ) -> Result<()> {
-    create_xiso_from_dir_with_progress(dir, output, fmt, log, &|_| ())
+    create_xiso_from_dir_with_progress(dir, output, fmt, log, &|_| (), false)
 }
 
 /// Like [`create_xiso_from_dir`], reporting progress through `progress` in the
 /// same style as extraction (a header line, then `[n/total] path`).
+///
+/// When `skip_systemupdate` is set, a top-level `$SystemUpdate` directory is
+/// skipped (same as extract-xiso `-s`).
 pub fn create_xiso_from_dir_with_progress(
     dir: &Path,
     output: &Path,
     fmt: OutputFormat,
     log: &dyn Fn(String),
     progress: &dyn Fn(String),
+    skip_systemupdate: bool,
 ) -> Result<()> {
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
     }
 
-    let mut arena = build_tree_from_dir_arena(dir, output)?;
+    let mut arena = build_tree_from_dir_arena(dir, output, skip_systemupdate)?;
     calculate_arena_sizes(&mut arena);
     check_duplicates_arena(&arena)?;
 
@@ -113,7 +117,7 @@ mod tests {
         fs::create_dir_all(&cur).unwrap();
         fs::write(cur.join("leaf.txt"), b"leaf").unwrap();
         // The builder itself handles arbitrary depth iteratively.
-        let arena = build_tree_from_dir_arena(&dir, &dir.join("deep.iso")).unwrap();
+        let arena = build_tree_from_dir_arena(&dir, &dir.join("deep.iso"), false).unwrap();
         assert_eq!(arena.len(), 501); // root + 500 nested dirs
                                       // End-to-end round-trip within the parser's depth guard.
         let shallow: PathBuf = (0..30).map(|i| format!("d{i}")).collect();

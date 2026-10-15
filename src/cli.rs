@@ -7,32 +7,40 @@ use clap::Parser;
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "tu_parser",
+    name = "x360-rs",
     version,
     about = "Xbox 360 container and image parser (STFS, XISO, XEX, GoD)"
 )]
 pub(crate) struct Args {
+    /// One or more files to parse (format auto-detected).
     #[arg()]
     pub files: Vec<PathBuf>,
 
+    /// Parse all files directly inside a directory.
     #[arg(long, conflicts_with = "files")]
     pub dir: Option<PathBuf>,
 
+    /// With --dir: descend into subdirectories.
     #[arg(long, requires = "dir")]
     pub recursive: bool,
 
+    /// Parse an extracted game directory (tree stats + default.xex/.xbe).
     #[arg(long, conflicts_with_all = ["files", "dir", "extract", "bench_extract_iso"])]
     pub game_dir: Option<PathBuf>,
 
+    /// Report output format.
     #[arg(short, long, default_value = "text")]
     pub format: OutputFormat,
 
+    /// Write the report to a file instead of stdout.
     #[arg(short, long)]
     pub output: Option<PathBuf>,
 
+    /// List raw strings found in the file.
     #[arg(long)]
     pub show_strings: bool,
 
+    /// Always list all directory entries (default lists them when <= 50).
     #[arg(long)]
     pub show_entries: bool,
 
@@ -53,7 +61,9 @@ pub(crate) struct Args {
     pub bench_extract_iso: bool,
 
     /// Optimize/repack existing XISO (removes padding, contiguous sectors).
-    /// Uses `-o/--output` as the destination ISO path.
+    /// Produces XSF by default (smallest, same as extract-xiso); use
+    /// --preserve-format to keep the input format. Already-optimized inputs
+    /// (extract-xiso tag) are skipped. Uses `-o/--output` as destination.
     #[arg(
         long,
         conflicts_with_all = [
@@ -85,13 +95,24 @@ pub(crate) struct Args {
     pub create: Option<PathBuf>,
 
     /// Output image format for --create (default: xsf).
-    /// For --optimize the input format is preserved.
+    /// --optimize produces xsf unless --preserve-format is given.
     #[arg(long, value_name = "FORMAT", default_value = "xsf")]
     pub create_format: crate::write::format::OutputFormat,
 
     /// Overwrite input file in place (creates a .bak backup first).
     #[arg(long, requires = "optimize")]
     pub in_place: bool,
+
+    /// Skip the $SystemUpdate folder during extract, optimize and create
+    /// (same as extract-xiso -s).
+    #[arg(short = 's', long)]
+    pub skip_systemupdate: bool,
+
+    /// Suppress console output (progress, reports and informational messages).
+    /// Warnings and errors are still printed; the --output file is still
+    /// written when given.
+    #[arg(short = 'q', long, conflicts_with = "verbose")]
+    pub quiet: bool,
 
     /// Preserve the original XISO format (XGD3, XGD2, XGD1) during optimization.
     /// By default, --optimize produces XSF (smallest file, same as extract-xiso).
@@ -103,6 +124,7 @@ pub(crate) struct Args {
     #[arg(long, requires = "optimize")]
     pub verify_output: bool,
 
+    /// Print parse progress to stderr.
     #[arg(short, long)]
     pub verbose: bool,
 }

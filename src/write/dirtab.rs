@@ -78,7 +78,11 @@ fn absolutize(path: &Path) -> PathBuf {
 /// overflow the call stack. `output` (the ISO being created) is excluded
 /// from the walk so re-runs don't absorb a stale output left inside the
 /// source directory. Symlinks are rejected.
-pub(crate) fn build_tree_from_dir_arena(dir: &Path, output: &Path) -> Result<Vec<ArenaNode>> {
+pub(crate) fn build_tree_from_dir_arena(
+    dir: &Path,
+    output: &Path,
+    skip_systemupdate: bool,
+) -> Result<Vec<ArenaNode>> {
     use anyhow::Context as _;
 
     let dir_canon = dir
@@ -113,6 +117,7 @@ pub(crate) fn build_tree_from_dir_arena(dir: &Path, output: &Path) -> Result<Vec
 
         // Group child directories to push after files for deterministic order.
         let mut pending_dirs: Vec<(PathBuf, usize)> = Vec::new();
+        let at_root = fs_dir == dir_canon;
         for (name, file_type, path) in collected {
             if path == out_abs {
                 if file_type.is_dir() {
@@ -125,6 +130,10 @@ pub(crate) fn build_tree_from_dir_arena(dir: &Path, output: &Path) -> Result<Vec
             }
             if file_type.is_symlink() {
                 anyhow::bail!("symlinks not supported: {}", path.display());
+            }
+            // Same as extract-xiso -s: drop the top-level $SystemUpdate folder.
+            if skip_systemupdate && at_root && name.eq_ignore_ascii_case("$SystemUpdate") {
+                continue;
             }
             if file_type.is_dir() {
                 let child_idx = arena.len();
@@ -389,7 +398,8 @@ pub(crate) fn layout_table<S: AsRef<str>>(names: &[S]) -> TableLayout {
     let mut rchild: Vec<Option<usize>> = vec![None; n];
     let mut root = None;
     // (lo, hi, parent link): `Some((parent, is_left))` or None for the root.
-    let mut work: Vec<(usize, usize, Option<(usize, bool)>)> = vec![(0, n, None)];
+    type LayoutWork = (usize, usize, Option<(usize, bool)>);
+    let mut work: Vec<LayoutWork> = vec![(0, n, None)];
     while let Some((lo, hi, link)) = work.pop() {
         if lo >= hi {
             continue;
