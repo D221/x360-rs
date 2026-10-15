@@ -56,6 +56,24 @@ pub(crate) struct Args {
     #[arg(long, value_name = "OUTDIR", conflicts_with = "extract")]
     pub extract_iso: Option<PathBuf>,
 
+    /// Copy a single file or directory out of an XISO image
+    /// (same as xdvdfs copy-out). Uses `-o/--output` as the destination
+    /// path; requires exactly one input file.
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with_all = [
+            "extract",
+            "extract_iso",
+            "bench_extract_iso",
+            "optimize",
+            "create",
+            "game_dir",
+            "dir"
+        ]
+    )]
+    pub copy_out: Option<String>,
+
     /// Benchmark all XISO extraction methods and show fastest.
     #[arg(long, conflicts_with = "extract")]
     pub bench_extract_iso: bool,

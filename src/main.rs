@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use crate::cli::{collect_files, Args, OutputFormat};
-use crate::extract::{benchmark_extract_iso, extract_iso_fast_with_progress};
+use crate::extract::{benchmark_extract_iso, copy_out_iso, extract_iso_fast_with_progress};
 use crate::parse::{parse_file, parse_game_dir, parse_iso};
 use crate::render::{emit, report_summary};
 use crate::report::Report;
@@ -161,6 +161,37 @@ fn compare_iso_file_bytes(
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Copy-out mode: copy a single file or directory out of one XISO image
+    // (same as xdvdfs copy-out). Returns before the parse sweep so the
+    // report emitter cannot overwrite the destination file.
+    if let Some(src_path) = &args.copy_out {
+        if args.files.len() != 1 {
+            anyhow::bail!("--copy-out requires exactly one input file");
+        }
+        let input = &args.files[0];
+        let dest = args
+            .output
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("--copy-out requires -o/--output destination"))?;
+        let meta =
+            std::fs::metadata(input).with_context(|| format!("cannot stat {}", input.display()))?;
+        let info = parse_iso(input, meta.len())?;
+        match copy_out_iso(&info, src_path, &dest, args.skip_systemupdate) {
+            Ok(res) => {
+                if !args.quiet {
+                    eprintln!(
+                        "copied {} files ({} bytes) from {}",
+                        res.files_copied, res.bytes_copied, src_path
+                    );
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                anyhow::bail!("copy-out {}: {:#}", input.display(), e);
+            }
+        }
+    }
 
     // Create mode: build a new XISO from an extracted game directory.
     if let Some(dir) = &args.create {
@@ -309,6 +340,11 @@ fn main() -> Result<()> {
     }
 
     let file_paths = collect_files(&args.files, args.dir.as_ref(), args.recursive)?;
+
+    if file_paths.is_empty() {
+        eprintln!("No files to process");
+        return Ok(());
+    }
 
     if file_paths.is_empty() {
         eprintln!("No files to process");

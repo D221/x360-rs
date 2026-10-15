@@ -570,6 +570,46 @@ fn test_zero_byte_file_does_not_truncate_table() {
 }
 
 #[test]
+fn test_copy_out_single_file_and_subtree() {
+    use crate::extract::copy_out_iso;
+    use crate::write::format::OutputFormat as XisoFormat;
+    let dir = std::env::temp_dir().join(format!("tu_copyout_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("a.txt"), b"aaa").unwrap();
+    std::fs::write(dir.join("sub").join("b.txt"), b"bbbb").unwrap();
+    let out = std::env::temp_dir().join(format!("tu_copyout_{}.iso", std::process::id()));
+    crate::write::create_xiso_from_dir(&dir, &out, XisoFormat::Xsf, &(|_| ()))
+        .expect("create writes");
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let info = parse_iso(&out, out_size).expect("output re-parses");
+    // info needs the real source path for copy-out reads.
+    let mut info = info;
+    info.file_path = out.display().to_string();
+
+    // Single file, exact bytes back (case-insensitive match).
+    let dest = std::env::temp_dir().join(format!("tu_copyout_{}_a.txt", std::process::id()));
+    let res = copy_out_iso(&info, "SUB\\B.TXT", &dest, false).expect("copy file");
+    assert_eq!(res.files_copied, 1);
+    assert_eq!(res.bytes_copied, 4);
+    assert_eq!(std::fs::read(&dest).unwrap(), b"bbbb");
+
+    // Directory subtree.
+    let dest_dir = std::env::temp_dir().join(format!("tu_copyout_{}_sub", std::process::id()));
+    let res = copy_out_iso(&info, "sub", &dest_dir, false).expect("copy dir");
+    assert_eq!(res.files_copied, 1);
+    assert_eq!(std::fs::read(dest_dir.join("b.txt")).unwrap(), b"bbbb");
+
+    // Missing path errors.
+    assert!(copy_out_iso(&info, "nope.txt", &dest, false).is_err());
+
+    let _ = std::fs::remove_file(&dest);
+    let _ = std::fs::remove_dir_all(&dest_dir);
+    let _ = std::fs::remove_file(&out);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_is_systemupdate_path_matches() {
     use crate::iso::is_systemupdate_path;
     assert!(is_systemupdate_path("$SystemUpdate"));
