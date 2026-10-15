@@ -192,20 +192,19 @@ fn md5_entry_bytes(source: &mut File, base: u64, sector: u32, size: u64) -> Resu
 }
 
 /// Display form of an image-internal path: `/` separators, no leading slash
-/// (xdvdfs style: `/sub/b.txt`).
+/// (xdvdfs style: `sub/b.txt`; checksum keys add the leading slash).
 fn display_path(path: &str) -> String {
     path.replace('\\', "/").trim_matches('/').to_string()
 }
 
-/// Per-file MD5 digests for an already-parsed XISO image, in sorted
-/// display-path order. Directories are skipped: table layouts differ
-/// between tools by design, so only file contents (which must match)
-/// are hashed.
+/// Per-entry MD5 digests for an already-parsed XISO image, in sorted
+/// display-path order (xdvdfs prints table-walk order instead, so compare
+/// sorted). Directories hash their raw table bytes, exactly like xdvdfs
+/// `md5` — same image gives identical lines from either tool.
 pub fn md5_iso(info: &crate::iso::IsoInfo) -> Result<Vec<(String, String)>> {
     use anyhow::Context as _;
     let base = crate::write::format::iso_type_offset(&info.iso_type);
-    let mut entries: Vec<&crate::iso::IsoEntry> =
-        info.entries.iter().filter(|e| !e.is_dir).collect();
+    let mut entries: Vec<&crate::iso::IsoEntry> = info.entries.iter().collect();
     entries.sort_by_key(|e| display_path(&e.path));
     let mut source =
         File::open(&info.file_path).with_context(|| format!("open {} for md5", info.file_path))?;
@@ -217,24 +216,27 @@ pub fn md5_iso(info: &crate::iso::IsoInfo) -> Result<Vec<(String, String)>> {
     Ok(out)
 }
 
-/// Deterministic SHA256 over an image's file contents: file bytes
-/// concatenated in sorted display-path order. Same inputs always give
-/// the same value regardless of container layout, so it detects content
-/// drift between rebuilds. Values are x360-rs-specific (not comparable
-/// with xdvdfs `checksum`, which folds in table metadata).
+/// Deterministic content checksum, mirroring xdvdfs `checksum`
+/// (`xdvdfs-core/src/checksum.rs`): SHA3-256 over entries in byte-sorted
+/// `/path` order, feeding each key's bytes then (for files) its data bytes.
+/// Same image gives the identical value from either tool.
 pub fn checksum_iso(info: &crate::iso::IsoInfo) -> Result<String> {
     use anyhow::Context as _;
-    use sha2::Digest as _;
+    use sha3::Digest as _;
     const BUF: usize = 1024 * 1024;
     let base = crate::write::format::iso_type_offset(&info.iso_type);
-    let mut entries: Vec<&crate::iso::IsoEntry> =
-        info.entries.iter().filter(|e| !e.is_dir).collect();
-    entries.sort_by_key(|e| display_path(&e.path));
+    let mut entries: Vec<&crate::iso::IsoEntry> = info.entries.iter().collect();
+    entries.sort_by_key(|e| format!("/{}", display_path(&e.path)));
     let mut source = File::open(&info.file_path)
         .with_context(|| format!("open {} for checksum", info.file_path))?;
-    let mut hasher = sha2::Sha256::new();
+    let mut hasher = sha3::Sha3_256::new();
     let mut buf = vec![0u8; BUF];
     for e in entries {
+        let key = format!("/{}", display_path(&e.path));
+        hasher.update(key.as_bytes());
+        if e.is_dir {
+            continue;
+        }
         source
             .seek(SeekFrom::Start(base + e.sector as u64 * SECTOR_SIZE))
             .context("seek entry data")?;

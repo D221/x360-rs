@@ -80,7 +80,7 @@ pub(crate) struct Args {
     pub md5: bool,
 
     /// Print a deterministic SHA256 over XISO image contents
-    /// (same purpose as xdvdfs checksum; values are x360-rs-specific).
+    /// (same as xdvdfs checksum).
     #[arg(long)]
     pub checksum: bool,
 

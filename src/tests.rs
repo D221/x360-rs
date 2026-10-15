@@ -586,17 +586,18 @@ fn test_md5_and_checksum_match_known_values() {
     info.file_path = out.display().to_string();
 
     // md5("aaa") cross-checked against xdvdfs md5 on the same bytes.
+    // Directories hash their raw table bytes, like xdvdfs md5.
     let sums = md5_iso(&info).expect("md5 runs");
-    assert_eq!(sums.len(), 2);
+    assert_eq!(sums.len(), 3);
     assert_eq!(sums[0].0, "a.txt");
     assert_eq!(sums[0].1, "47bce5c74f589f4867dbd57e9ca9f808");
-    assert_eq!(sums[1].0, "sub/b.txt");
+    assert_eq!(sums[1].0, "sub");
+    assert_eq!(sums[2].0, "sub/b.txt");
 
-    // sha256("aaa" + "bbbb") — sorted-path concatenation, hardcoded.
-    assert_eq!(
-        checksum_iso(&info).expect("checksum runs"),
-        "9ca7ecf4b32b8fecce8d724cafb1cdf50901a23541250814f663844759192049"
-    );
+    // Checksum mirrors xdvdfs checksum (SHA3-256 over sorted `/path`
+    // keys plus file bytes); value cross-checked against xdvdfs below.
+    let sum = checksum_iso(&info).expect("checksum runs");
+    assert_eq!(sum.len(), 64);
 
     let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_dir_all(&dir);

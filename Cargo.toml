@@ -21,7 +21,7 @@ windows = { version = "0.58", optional = true, features = [
     "Win32_Security",
 ] }
 md5 = "0.8.1"
-sha2 = "0.11.1"
+sha3 = "0.12.0"
 
 [target.'cfg(target_family = "unix")'.dependencies]
 libc = "0.2"

@@ -91,7 +91,7 @@ x360-rs file --show-entries --show-strings -v
 | `--extract-iso <DIR>` | Extract XISO/GDF contents into `DIR/<TitleID>/` (multi-threaded, auto-best method) |
 | `--copy-out <PATH>` | Copy a single file or directory out of an XISO image (same as xdvdfs `copy-out`); uses `-o` as destination; requires one input file |
 | `--md5` | Print MD5 checksums for files in XISO image(s) (same as xdvdfs `md5`, files only) |
-| `--checksum` | Print a deterministic SHA256 over XISO image contents (same purpose as xdvdfs `checksum`; values are x360-rs-specific: file bytes in sorted-path order) |
+| `--checksum` | Print a deterministic content checksum identical to xdvdfs `checksum` (SHA3-256 over sorted `/path` keys plus file bytes) |
 | `--bench-extract-iso` | Benchmark all XISO extraction methods, report fastest |
 | `--optimize` | Rebuild XISO with contiguous sectors (removes padding); uses `-o` as destination; `--in-place` overwrites with `.bak` backup; `--verify-output` re-parses and compares |
 | `--create <DIR>` | Build a new XISO from an extracted game directory; uses `-o` as destination |
