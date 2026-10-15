@@ -176,6 +176,10 @@ Region mask bits (as tested by the original checker):
   on [Free60](https://free60.org/System-Software/Formats/STFS/).
 - Region bit mapping confirmed by reverse-engineering the original
   *Title Update Checker* binary (region checks at `0x4032FE–0x4036A6`).
+- Optimization/extraction behavior verified against [extract-xiso](https://github.com/XboxDev/extract-xiso)
+  (`-r` rewrite, `-s` skip, `-c` create, `in!xiso!` tag, `.xbe` media-enable
+  patch) by in &lt;in@fishtank.com&gt;, and [xdvdfs](https://github.com/antangelo/xdvdfs)
+  (`pack`/`unpack`/`copy-out`/`md5`/`checksum`/`build-image` semantics).
 - No code was copied from any of these projects; all parsing code here is original.
 
 ## License
