@@ -23,12 +23,38 @@ struct WriteFrame {
     awaiting_child: bool,
 }
 
+/// `.xbe` media-enable pattern (same as extract-xiso `XISO_MEDIA_ENABLE`):
+/// byte at position 7 is rewritten from `0x7D` to `0xEB` everywhere it
+/// occurs, so original-Xbox executables boot from backup media.
+const MEDIA_PATTERN: [u8; 8] = [0xe8, 0xca, 0xfd, 0xff, 0xff, 0x85, 0xc0, 0x7d];
+const MEDIA_PATCH_POS: usize = 7;
+const MEDIA_PATCH_BYTE: u8 = 0xeb;
+
+/// Patch every occurrence of the media-enable pattern in `buf`, in place.
+/// Already-patched bytes cannot re-match (position 7 must be `0x7D`).
+pub(crate) fn patch_media_enable(buf: &mut [u8]) {
+    if buf.len() < MEDIA_PATTERN.len() {
+        return;
+    }
+    for i in 0..=(buf.len() - MEDIA_PATTERN.len()) {
+        if buf[i..i + MEDIA_PATTERN.len()] == MEDIA_PATTERN {
+            buf[i + MEDIA_PATCH_POS] = MEDIA_PATCH_BYTE;
+        }
+    }
+}
+
+/// Case-insensitive `.xbe` suffix test (same as extract-xiso).
+pub(crate) fn is_xbe_file(name: &str) -> bool {
+    name.len() >= 4 && name[name.len() - 4..].eq_ignore_ascii_case(".xbe")
+}
+
 fn copy_file_data(
     source: &mut File,
     source_offset: u64,
     output: &mut File,
     output_offset: u64,
     size: u64,
+    media_patch: bool,
 ) -> Result<()> {
     const BUF_SIZE: usize = 1024 * 1024;
 
@@ -47,11 +73,31 @@ fn copy_file_data(
 
     let mut remaining = size;
     let mut buffer = vec![0u8; BUF_SIZE];
+    // Trailing raw bytes held back so a pattern straddling two chunks is
+    // still found (same 7-byte overlap as extract-xiso).
+    let mut carry: Vec<u8> = Vec::new();
     while remaining > 0 {
         let to_read = (remaining as usize).min(buffer.len());
         source.read_exact(&mut buffer[..to_read])?;
-        output.write_all(&buffer[..to_read])?;
         remaining -= to_read as u64;
+        if !media_patch {
+            output.write_all(&buffer[..to_read])?;
+            continue;
+        }
+        let mut window = std::mem::take(&mut carry);
+        window.extend_from_slice(&buffer[..to_read]);
+        patch_media_enable(&mut window);
+        let keep = if remaining == 0 {
+            0
+        } else {
+            (MEDIA_PATTERN.len() - 1).min(window.len())
+        };
+        let (emit, rest) = window.split_at(window.len() - keep);
+        output.write_all(emit)?;
+        carry = rest.to_vec();
+    }
+    if !carry.is_empty() {
+        output.write_all(&carry)?;
     }
     Ok(())
 }
@@ -72,6 +118,7 @@ struct Writer<'a> {
     output_base: u64,
     log: &'a dyn Fn(String),
     progress: &'a dyn Fn(String),
+    xbe_media_patch: bool,
     total_files: u64,
     files_done: u64,
 }
@@ -226,6 +273,8 @@ impl Writer<'_> {
                 }
                 let source_sector = self.arena[node_idx].entries[i].source_sector;
                 let on_disk = self.arena[node_idx].entries[i].on_disk.clone();
+                let entry_name = self.arena[node_idx].entries[i].name.clone();
+                let media_patch = self.xbe_media_patch && is_xbe_file(&entry_name);
                 let file_sector = self.allocator.allocate_contiguous(size);
                 if let Some(path) = on_disk {
                     let mut src_file = File::open(&path)
@@ -236,6 +285,7 @@ impl Writer<'_> {
                         self.output,
                         self.output_base + file_sector as u64 * SECTOR_SIZE,
                         size,
+                        media_patch,
                     )?;
                 } else {
                     let src = self
@@ -248,7 +298,11 @@ impl Writer<'_> {
                         self.output,
                         self.output_base + file_sector as u64 * SECTOR_SIZE,
                         size,
+                        media_patch,
                     )?;
+                }
+                if media_patch {
+                    (self.log)(format!("MediaPatched({entry_name})"));
                 }
                 let name = self.arena[node_idx].entries[i].name.clone();
                 let file_path = if self.arena[node_idx].path.as_os_str().is_empty() {
@@ -285,17 +339,19 @@ pub fn create_xiso_from_parsed(
     fmt: OutputFormat,
     log: &dyn Fn(String),
 ) -> Result<()> {
-    create_xiso_from_parsed_with_progress(info, output, fmt, log, &|_| ())
+    create_xiso_from_parsed_with_progress(info, output, fmt, log, &|_| (), true)
 }
 
 /// Like [`create_xiso_from_parsed`], reporting progress through `progress`
 /// in the same style as extraction (a header line, then `[n/total] path`).
+#[allow(clippy::too_many_arguments)]
 pub fn create_xiso_from_parsed_with_progress(
     info: &IsoInfo,
     output: &Path,
     fmt: OutputFormat,
     log: &dyn Fn(String),
     progress: &dyn Fn(String),
+    xbe_media_patch: bool,
 ) -> Result<()> {
     if info.file_path.is_empty() {
         anyhow::bail!("IsoInfo has no source file path");
@@ -315,6 +371,7 @@ pub fn create_xiso_from_parsed_with_progress(
         info.volume_timestamp.unwrap_or(0),
         log,
         progress,
+        xbe_media_patch,
     )
 }
 
@@ -338,10 +395,14 @@ pub fn create_xiso_from_arena(
         volume_timestamp,
         log,
         &|_| (),
+        true,
     )
 }
 
 /// Like [`create_xiso_from_arena`], with an extraction-style progress callback.
+///
+/// When `xbe_media_patch` is set, `.xbe` file contents get the media-enable
+/// patch (same as extract-xiso default; `--no-media-patch` disables).
 #[allow(clippy::too_many_arguments)]
 pub fn create_xiso_from_arena_with_progress(
     mut arena: Vec<ArenaNode>,
@@ -352,6 +413,7 @@ pub fn create_xiso_from_arena_with_progress(
     volume_timestamp: u64,
     log: &dyn Fn(String),
     progress: &dyn Fn(String),
+    xbe_media_patch: bool,
 ) -> Result<()> {
     if arena.is_empty() {
         anyhow::bail!("empty directory tree");
@@ -397,6 +459,7 @@ pub fn create_xiso_from_arena_with_progress(
         output_base,
         log,
         progress,
+        xbe_media_patch,
         total_files,
         files_done: 0,
     };

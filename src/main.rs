@@ -61,11 +61,18 @@ fn optimize_one(
             eprintln!("{m}");
         }
     };
-    create_xiso_from_parsed_with_progress(info, out, fmt, &log, &|m| {
-        if !args.quiet {
-            eprintln!("{m}");
-        }
-    })?;
+    create_xiso_from_parsed_with_progress(
+        info,
+        out,
+        fmt,
+        &log,
+        &|m| {
+            if !args.quiet {
+                eprintln!("{m}");
+            }
+        },
+        !args.no_media_patch,
+    )?;
     if args.verbose {
         eprintln!("optimized {} -> {}", src.display(), out.display());
     }
@@ -73,7 +80,7 @@ fn optimize_one(
         let out_meta =
             std::fs::metadata(out).with_context(|| format!("cannot stat {}", out.display()))?;
         let out_info = parse_iso(&out.to_path_buf(), out_meta.len())?;
-        verify_optimize_fidelity(info, &out_info).with_context(|| {
+        verify_optimize_fidelity(info, &out_info, !args.no_media_patch).with_context(|| {
             format!("optimized output verification failed for {}", out.display())
         })?;
         if args.verbose {
@@ -86,6 +93,7 @@ fn optimize_one(
 fn verify_optimize_fidelity(
     before: &crate::iso::IsoInfo,
     after: &crate::iso::IsoInfo,
+    media_patch: bool,
 ) -> Result<()> {
     use std::collections::BTreeMap;
     if before.entries.len() != after.entries.len() {
@@ -114,7 +122,7 @@ fn verify_optimize_fidelity(
                     anyhow::bail!("attributes changed for {}", e.path);
                 }
                 if !e.is_dir && e.size > 0 {
-                    compare_iso_file_bytes(before, src, after, e)?;
+                    compare_iso_file_bytes(before, src, after, e, media_patch)?;
                 }
             }
             None => anyhow::bail!("unexpected entry in output: {}", e.path),
@@ -127,12 +135,16 @@ fn verify_optimize_fidelity(
 }
 
 /// Stream-compare the data bytes of one file entry between two images.
+/// When `media_patch` is set and the entry is a `.xbe` file, the source
+/// bytes are patched before comparing (the output was patched on write).
 fn compare_iso_file_bytes(
     before: &crate::iso::IsoInfo,
     b_entry: &crate::iso::IsoEntry,
     after: &crate::iso::IsoInfo,
     a_entry: &crate::iso::IsoEntry,
+    media_patch: bool,
 ) -> Result<()> {
+    use crate::write::img::{is_xbe_file, patch_media_enable};
     use std::fs::File;
     use std::io::{Read, Seek, SeekFrom};
     const BUF: usize = 1024 * 1024;
@@ -147,17 +159,45 @@ fn compare_iso_file_bytes(
         .context("seek source file data for verify")?;
     fa.seek(SeekFrom::Start(base_a + a_entry.sector as u64 * sector))
         .context("seek output file data for verify")?;
+    let patch = media_patch && is_xbe_file(&a_entry.path);
     let mut remaining = b_entry.size;
     let mut bb = vec![0u8; BUF];
     let mut ba = vec![0u8; BUF];
+    // Same 7-byte hold-back as the writer so chunk boundaries patch alike.
+    let mut carry: Vec<u8> = Vec::new();
     while remaining > 0 {
         let n = (remaining as usize).min(BUF);
         fb.read_exact(&mut bb[..n]).context("read source bytes")?;
-        fa.read_exact(&mut ba[..n]).context("read output bytes")?;
-        if bb[..n] != ba[..n] {
+        remaining -= n as u64;
+        if !patch {
+            fa.read_exact(&mut ba[..n]).context("read output bytes")?;
+            if bb[..n] != ba[..n] {
+                anyhow::bail!("content differs for {}", a_entry.path);
+            }
+            continue;
+        }
+        let mut window = std::mem::take(&mut carry);
+        window.extend_from_slice(&bb[..n]);
+        patch_media_enable(&mut window);
+        let keep = if remaining == 0 {
+            0
+        } else {
+            7.min(window.len())
+        };
+        let (emit, rest) = window.split_at(window.len() - keep);
+        fa.read_exact(&mut ba[..emit.len()])
+            .context("read output bytes")?;
+        if emit != &ba[..emit.len()] {
             anyhow::bail!("content differs for {}", a_entry.path);
         }
-        remaining -= n as u64;
+        carry = rest.to_vec();
+    }
+    if !carry.is_empty() {
+        fa.read_exact(&mut ba[..carry.len()])
+            .context("read output bytes")?;
+        if carry[..] != ba[..carry.len()] {
+            anyhow::bail!("content differs for {}", a_entry.path);
+        }
     }
     Ok(())
 }
@@ -228,6 +268,7 @@ fn main() -> Result<()> {
                 &log,
                 &progress,
                 args.skip_systemupdate,
+                !args.no_media_patch,
             )?;
         } else {
             let mut rules = Vec::with_capacity(args.map.len());
@@ -243,6 +284,7 @@ fn main() -> Result<()> {
                 args.skip_systemupdate,
                 &rules,
                 args.dry_run,
+                !args.no_media_patch,
             )?;
         }
         if !args.quiet && !args.dry_run {

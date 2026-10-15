@@ -531,7 +531,7 @@ fn test_verify_fidelity_catches_content_tamper() {
     }
     let out_size = std::fs::metadata(&out).unwrap().len();
     let tampered = parse_iso(&out, out_size).expect("tampered re-parses");
-    assert!(crate::verify_optimize_fidelity(&info, &tampered).is_err());
+    assert!(crate::verify_optimize_fidelity(&info, &tampered, false).is_err());
     std::fs::remove_file(&path).ok();
     std::fs::remove_file(&out).ok();
 }
@@ -544,10 +544,10 @@ fn test_verify_fidelity_catches_attr_and_timestamp_diff() {
     let info = parse_iso(&path, size).expect("synthetic parses");
     let mut changed = info.clone();
     changed.entries[0].attrs.archive = !changed.entries[0].attrs.archive;
-    assert!(crate::verify_optimize_fidelity(&info, &changed).is_err());
+    assert!(crate::verify_optimize_fidelity(&info, &changed, false).is_err());
     let mut changed_ts = info.clone();
     changed_ts.volume_timestamp = Some(info.volume_timestamp.unwrap_or(0).wrapping_add(1));
-    assert!(crate::verify_optimize_fidelity(&info, &changed_ts).is_err());
+    assert!(crate::verify_optimize_fidelity(&info, &changed_ts, false).is_err());
     std::fs::remove_file(&path).ok();
 }
 
@@ -679,6 +679,7 @@ fn test_mapped_create_relocates_prefix_and_excludes() {
         false,
         &rules,
         false,
+        true,
     )
     .expect("mapped create writes");
     let out_size = std::fs::metadata(&out).unwrap().len();
@@ -718,9 +719,95 @@ fn test_mapped_dry_run_writes_nothing() {
         false,
         &rules,
         true,
+        true,
     )
     .expect("dry run ok");
     assert!(!out.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_media_patch_rewrites_pattern_bytes() {
+    use crate::write::img::{is_xbe_file, patch_media_enable};
+    assert!(is_xbe_file("default.xbe"));
+    assert!(is_xbe_file("DEFAULT.XBE"));
+    assert!(!is_xbe_file("default.xex"));
+    assert!(!is_xbe_file("xbe"));
+    // Pattern at buffer start, mid-buffer, and straddling position.
+    let mut buf = vec![0u8];
+    buf.extend_from_slice(&[0xe8, 0xca, 0xfd, 0xff, 0xff, 0x85, 0xc0, 0x7d]);
+    buf.extend_from_slice(&[0x11, 0x22]);
+    buf.extend_from_slice(&[0xe8, 0xca, 0xfd, 0xff, 0xff, 0x85, 0xc0, 0x7d]);
+    patch_media_enable(&mut buf);
+    assert_eq!(buf[8], 0xeb);
+    assert_eq!(buf[buf.len() - 1], 0xeb);
+    assert_eq!(buf[9], 0x11);
+    // Already-patched input is untouched (idempotent).
+    let before = buf.clone();
+    patch_media_enable(&mut buf);
+    assert_eq!(buf, before);
+    // Short buffers never match.
+    let mut tiny = vec![0xe8, 0xca];
+    patch_media_enable(&mut tiny);
+    assert_eq!(tiny, vec![0xe8, 0xca]);
+}
+
+#[test]
+fn test_create_patches_xbe_by_default() {
+    use crate::write::format::OutputFormat as XisoFormat;
+    let dir = std::env::temp_dir().join(format!("tu_xbe_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Fake .xbe with two pattern occurrences plus tail bytes.
+    let mut xbe = vec![0x90u8; 100];
+    xbe.extend_from_slice(&[0xe8, 0xca, 0xfd, 0xff, 0xff, 0x85, 0xc0, 0x7d]);
+    xbe.extend_from_slice(&[0x90u8; 3000]);
+    xbe.extend_from_slice(&[0xe8, 0xca, 0xfd, 0xff, 0xff, 0x85, 0xc0, 0x7d]);
+    xbe.extend_from_slice(&[0x90u8; 50]);
+    std::fs::write(dir.join("default.xbe"), &xbe).unwrap();
+    std::fs::write(dir.join("readme.txt"), b"plain").unwrap();
+    let out = std::env::temp_dir().join(format!("tu_xbe_{}.iso", std::process::id()));
+    crate::write::create_xiso_from_dir_with_progress(
+        &dir,
+        &out,
+        XisoFormat::Xsf,
+        &(|_| ()),
+        &(|_| ()),
+        false,
+        true,
+    )
+    .expect("create writes");
+    let out_size = std::fs::metadata(&out).unwrap().len();
+    let mut info = parse_iso(&out, out_size).expect("output re-parses");
+    info.file_path = out.display().to_string();
+    let entry = info
+        .entries
+        .iter()
+        .find(|e| e.path.eq_ignore_ascii_case("default.xbe"))
+        .expect("xbe entry present")
+        .clone();
+    // Read back the stored bytes via copy-out and check both hits patched.
+    let dest = std::env::temp_dir().join(format!("tu_xbe_{}_out.xbe", std::process::id()));
+    let res = crate::extract::copy_out_iso(&info, &entry.path, &dest, false).expect("copy out");
+    assert_eq!(res.bytes_copied as usize, xbe.len());
+    let stored = std::fs::read(&dest).unwrap();
+    assert_eq!(stored.len(), xbe.len());
+    assert_eq!(stored[107], 0xeb);
+    assert_eq!(stored[3115], 0xeb);
+    assert_eq!(stored[stored.len() - 1], 0x90);
+    // Non-xbe file untouched.
+    let txt = info
+        .entries
+        .iter()
+        .find(|e| e.path.eq_ignore_ascii_case("readme.txt"))
+        .expect("txt entry present")
+        .clone();
+    let dest_txt = std::env::temp_dir().join(format!("tu_xbe_{}_out.txt", std::process::id()));
+    crate::extract::copy_out_iso(&info, &txt.path, &dest_txt, false).expect("copy out");
+    assert_eq!(std::fs::read(&dest_txt).unwrap(), b"plain");
+    let _ = std::fs::remove_file(&dest);
+    let _ = std::fs::remove_file(&dest_txt);
+    let _ = std::fs::remove_file(&out);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

@@ -94,7 +94,7 @@ Design docs (not in this dir): `../docs/superpowers/specs/` + `../docs/superpowe
 - `-s/--skip-systemupdate`: drops top-level `$SystemUpdate` in extract, optimize and create (same as extract-xiso `-s`); matcher is `iso.rs::is_systemupdate_path` (first path component, case-insensitive)
 - `-q/--quiet` (conflicts with `-v`): silences console progress and reports; warnings/errors still print; `--output` file is still written
 - Warnings (`warning: ...`) must stay visible - never hide skips/fallbacks behind quiet or verbose gates
-- No `.xbe` media-enable patching (extract-xiso does this by default; out of scope - 360-focused)
+- `.xbe` media-enable patching is on by default in create/optimize (same as extract-xiso; `--no-media-patch` disables); `--verify-output` accounts for it when comparing
 
 ---
 

@@ -160,6 +160,11 @@ pub(crate) struct Args {
     #[arg(long, requires = "optimize")]
     pub preserve_format: bool,
 
+    /// Disable automatic .xbe media-enable patching during create/optimize
+    /// (same as extract-xiso -m). Patching is on by default.
+    #[arg(long)]
+    pub no_media_patch: bool,
+
     /// Re-parse the optimized output and verify entry fidelity.
     #[arg(long, requires = "optimize")]
     pub verify_output: bool,

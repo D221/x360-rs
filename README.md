@@ -100,6 +100,7 @@ x360-rs file --show-entries --show-strings -v
 | `--create-format <xsf\|xgd2\|xgd3\|xgd1>` | Output image format for `--create` (default: `xsf`); `--optimize` produces `xsf` unless `--preserve-format` is given |
 | `--in-place` | With `--optimize`: overwrite input (backup to `.bak.iso` first, restore on failure) |
 | `--preserve-format` | With `--optimize`: keep the input format (`xgd3`/`xgd2`/`xgd1`) instead of default `xsf` output (advanced; larger files) |
+| `--no-media-patch` | Disable automatic `.xbe` media-enable patching during create/optimize (same as extract-xiso `-m`; patching is on by default) |
 | `-s, --skip-systemupdate` | Skip the `$SystemUpdate` folder during extract, optimize and create (same as extract-xiso `-s`) |
 | `-q, --quiet` | Suppress console output (progress, reports); warnings/errors still print, `--output` file still written (conflicts with `-v`) |
 | `--verify-output` | With `--optimize`: re-parse output and verify entry fidelity |

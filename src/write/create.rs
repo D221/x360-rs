@@ -20,14 +20,16 @@ pub fn create_xiso_from_dir(
     fmt: OutputFormat,
     log: &dyn Fn(String),
 ) -> Result<()> {
-    create_xiso_from_dir_with_progress(dir, output, fmt, log, &|_| (), false)
+    create_xiso_from_dir_with_progress(dir, output, fmt, log, &|_| (), false, true)
 }
 
 /// Like [`create_xiso_from_dir`], reporting progress through `progress` in the
 /// same style as extraction (a header line, then `[n/total] path`).
 ///
 /// When `skip_systemupdate` is set, a top-level `$SystemUpdate` directory is
-/// skipped (same as extract-xiso `-s`).
+/// skipped (same as extract-xiso `-s`). When `xbe_media_patch` is set,
+/// `.xbe` contents get the media-enable patch (extract-xiso default).
+#[allow(clippy::too_many_arguments)]
 pub fn create_xiso_from_dir_with_progress(
     dir: &Path,
     output: &Path,
@@ -35,6 +37,7 @@ pub fn create_xiso_from_dir_with_progress(
     log: &dyn Fn(String),
     progress: &dyn Fn(String),
     skip_systemupdate: bool,
+    xbe_media_patch: bool,
 ) -> Result<()> {
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
@@ -44,7 +47,17 @@ pub fn create_xiso_from_dir_with_progress(
     calculate_arena_sizes(&mut arena);
     check_duplicates_arena(&arena)?;
 
-    create_xiso_from_arena_with_progress(arena, None, 0, output, fmt, 0, log, progress)
+    create_xiso_from_arena_with_progress(
+        arena,
+        None,
+        0,
+        output,
+        fmt,
+        0,
+        log,
+        progress,
+        xbe_media_patch,
+    )
 }
 
 /// Create with host-to-image map rules (same as xdvdfs `build-image -m`).
@@ -61,6 +74,7 @@ pub fn create_xiso_from_mapped_dir_with_progress(
     skip_systemupdate: bool,
     rules: &[MapRule],
     dry_run: bool,
+    xbe_media_patch: bool,
 ) -> Result<()> {
     if !dir.is_dir() {
         anyhow::bail!("not a directory: {}", dir.display());
@@ -101,7 +115,17 @@ pub fn create_xiso_from_mapped_dir_with_progress(
     calculate_arena_sizes(&mut arena);
     check_duplicates_arena(&arena)?;
 
-    create_xiso_from_arena_with_progress(arena, None, 0, output, fmt, 0, log, progress)
+    create_xiso_from_arena_with_progress(
+        arena,
+        None,
+        0,
+        output,
+        fmt,
+        0,
+        log,
+        progress,
+        xbe_media_patch,
+    )
 }
 
 #[cfg(test)]
