@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   release:
     strategy:
@@ -30,13 +33,14 @@ jobs:
         run: |
           cp x360-menu.bat target/release/
           if [[ "${{ runner.os }}" == "Windows" ]]; then
-            7z a x360-rs-${{ runner.os }}.zip target/release/x360-rs.exe target/release/x360-menu.bat
+            powershell -Command "Compress-Archive -Path 'target/release/x360-rs.exe', 'target/release/x360-menu.bat' -DestinationPath 'x360-rs-windows-latest.zip'"
           else
-            zip x360-rs-${{ runner.os }}.zip target/release/x360-rs target/release/x360-menu.bat
+            zip x360-rs-ubuntu-latest.zip target/release/x360-rs target/release/x360-menu.bat
           fi
       - name: Upload release asset
         uses: softprops/action-gh-release@v1
         with:
+          tag_name: ${{ github.ref_name }}
           files: x360-rs-${{ runner.os }}.zip
           fail_on_unmatched_files: true
         env:
