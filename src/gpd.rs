@@ -341,3 +341,178 @@ pub fn decode_gpd_records(info: &XdbfInfo) -> Result<Vec<GpdRecord>> {
     }
     Ok(out)
 }
+
+/// Decoded SPA (Statistics, Presence, Achievement) records.
+/// SPA files are XDBF variant "xex" with entries identified by 4-char
+/// magic codes (XTHD, XACH, XITB, XSTR, etc.) instead of namespaces.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SpaRecord {
+    Xthd(SpaXthd),
+    Xach(SpaXach),
+    Xitb(SpaXitb),
+    Xstr(SpaXstr),
+}
+
+/// XTHD — Title header (SPA title type/version).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaXthd {
+    pub magic: String,
+    pub version: u32,
+    pub structure_size: u32,
+    pub title_id: String,
+    pub title_type: u32,
+    pub title_type_name: String,
+    pub version_major: u16,
+    pub version_minor: u16,
+    pub version_build: u16,
+    pub version_revision: u16,
+}
+
+/// XACH — Achievement catalog.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaXach {
+    pub magic: String,
+    pub version: u32,
+    pub structure_size: u32,
+    pub achievement_count: u16,
+}
+
+/// XITB — Image inventory.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaXitb {
+    pub magic: String,
+    pub version: u32,
+    pub structure_size: u32,
+    pub image_count: u32,
+}
+
+/// XSTR — String table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpaXstr {
+    pub magic: String,
+    pub version: u32,
+    pub structure_size: u32,
+    pub string_count: u16,
+}
+
+/// Decode SPA records from an XDBF variant "xex" file.
+/// Entries are identified by 4-char magic codes (XTHD, XACH, XITB, XSTR).
+pub fn decode_spa_records(info: &XdbfInfo) -> Vec<SpaRecord> {
+    if info.variant != "xex" {
+        return Vec::new();
+    }
+    let file = match File::open(Path::new(&info.file_path)) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+    let mut reader = std::io::BufReader::new(file);
+    use std::io::{Read as _, Seek as _};
+    let mut out = Vec::new();
+    for e in &info.entries {
+        if reader
+            .seek(std::io::SeekFrom::Start(info.data_start + e.offset as u64))
+            .is_err()
+        {
+            continue;
+        }
+        let mut data = vec![0u8; e.size as usize];
+        if reader.read_exact(&mut data).is_err() {
+            continue;
+        }
+        if data.len() < 4 {
+            continue;
+        }
+        let magic = &data[0..4];
+        match magic {
+            b"XTHD" => {
+                if let Some(x) = decode_xthd(&data) {
+                    out.push(SpaRecord::Xthd(x));
+                }
+            }
+            b"XACH" => {
+                if let Some(x) = decode_xach(&data) {
+                    out.push(SpaRecord::Xach(x));
+                }
+            }
+            b"XITB" => {
+                if let Some(x) = decode_xitb(&data) {
+                    out.push(SpaRecord::Xitb(x));
+                }
+            }
+            b"XSTR" => {
+                if let Some(x) = decode_xstr(&data) {
+                    out.push(SpaRecord::Xstr(x));
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn decode_xthd(data: &[u8]) -> Option<SpaXthd> {
+    if data.len() < 28 {
+        return None;
+    }
+    let title_type = be_u32(data, 0x10)?;
+    let title_type_name = match title_type {
+        0 => "System",
+        1 => "Full",
+        2 => "Demo",
+        3 => "Download",
+        _ => "Unknown",
+    }
+    .to_string();
+    Some(SpaXthd {
+        magic: "XTHD".to_string(),
+        version: be_u32(data, 0x04)?,
+        structure_size: be_u32(data, 0x08)?,
+        title_id: format!("{:08X}", be_u32(data, 0x0C)?),
+        title_type,
+        title_type_name,
+        version_major: be_u16(data, 0x14)?,
+        version_minor: be_u16(data, 0x16)?,
+        version_build: be_u16(data, 0x18)?,
+        version_revision: be_u16(data, 0x1A)?,
+    })
+}
+
+fn decode_xach(data: &[u8]) -> Option<SpaXach> {
+    if data.len() < 14 {
+        return None;
+    }
+    Some(SpaXach {
+        magic: "XACH".to_string(),
+        version: be_u32(data, 0x04)?,
+        structure_size: be_u32(data, 0x08)?,
+        achievement_count: be_u16(data, 0x0C)?,
+    })
+}
+
+fn decode_xitb(data: &[u8]) -> Option<SpaXitb> {
+    if data.len() < 16 {
+        return None;
+    }
+    Some(SpaXitb {
+        magic: "XITB".to_string(),
+        version: be_u32(data, 0x04)?,
+        structure_size: be_u32(data, 0x08)?,
+        image_count: be_u32(data, 0x0C)?,
+    })
+}
+
+fn decode_xstr(data: &[u8]) -> Option<SpaXstr> {
+    if data.len() < 14 {
+        return None;
+    }
+    Some(SpaXstr {
+        magic: "XSTR".to_string(),
+        version: be_u32(data, 0x04)?,
+        structure_size: be_u32(data, 0x08)?,
+        string_count: be_u16(data, 0x0C)?,
+    })
+}
+
+fn be_u16(b: &[u8], o: usize) -> Option<u16> {
+    Some(u16::from_be_bytes(b.get(o..o + 2)?.try_into().ok()?))
+}

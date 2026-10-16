@@ -308,6 +308,7 @@ pub fn report_info(info: &XdbfInfo) -> crate::report::XdbfFileInfo {
         num_entries: info.num_entries,
         title_name: info.title_name.clone(),
         records: Vec::new(),
+        spa_records: crate::gpd::decode_spa_records(info),
         entries: info
             .entries
             .iter()

@@ -657,6 +657,37 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                     }
                 }
             }
+            if !info.spa_records.is_empty() {
+                out.push_str(&format!("\nSPA records ({}):\n", info.spa_records.len()));
+                for r in &info.spa_records {
+                    match r {
+                        crate::gpd::SpaRecord::Xthd(x) => {
+                            out.push_str(&format!(
+                                "  XTHD: title {} type {} ({}), version {}.{}.{}.{}\n",
+                                x.title_id,
+                                x.title_type,
+                                x.title_type_name,
+                                x.version_major,
+                                x.version_minor,
+                                x.version_build,
+                                x.version_revision
+                            ));
+                        }
+                        crate::gpd::SpaRecord::Xach(x) => {
+                            out.push_str(&format!(
+                                "  XACH: {} achievements\n",
+                                x.achievement_count
+                            ));
+                        }
+                        crate::gpd::SpaRecord::Xitb(x) => {
+                            out.push_str(&format!("  XITB: {} images\n", x.image_count));
+                        }
+                        crate::gpd::SpaRecord::Xstr(x) => {
+                            out.push_str(&format!("  XSTR: {} strings\n", x.string_count));
+                        }
+                    }
+                }
+            }
             out.push('\n');
         }
         Report::GameDir(info) => {

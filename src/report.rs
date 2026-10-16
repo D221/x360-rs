@@ -84,6 +84,7 @@ pub struct XdbfFileInfo {
     pub title_name: Option<String>,
     pub entries: Vec<XdbfEntryInfo>,
     pub records: Vec<crate::gpd::GpdRecord>,
+    pub spa_records: Vec<crate::gpd::SpaRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
