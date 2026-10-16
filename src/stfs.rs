@@ -529,22 +529,29 @@ pub(crate) fn extract_thumbnails(
     out_dir: &Path,
 ) -> Result<u64> {
     use crate::tu_header::sniff_image_format;
+
     std::fs::create_dir_all(out_dir)?;
     let mut count = 0u64;
     for t in &info.thumbnails {
-        let dest = out_dir.join(format!(
+        let data = read_at(reader, t.offset, t.size as usize)?;
+        let ext = match sniff_image_format(&data) {
+            "png" => "png",
+            "dds" => "dds",
+            "bmp" => "bmp",
+            "jpg" => "jpg",
+            _ => "bin",
+        };
+        let out_path = out_dir.join(format!(
             "{}_{}.{}",
             sanitize_dir_name(&info.base_title_id),
             t.kind,
-            sniff_image_format(&read_at(reader, t.offset, t.size.min(64) as usize)?)
+            ext
         ));
-        let data = read_at(reader, t.offset, t.size as usize)?;
-        std::fs::write(&dest, &data)?;
+        std::fs::write(&out_path, &data)?;
         count += 1;
     }
     Ok(count)
 }
-
 /// Extract one parsed STFS report into `out_dir`, recreating the tree.
 /// Every block hash is verified during the walk; any failure aborts and
 /// removes the partial file.
