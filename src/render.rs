@@ -228,11 +228,19 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                     }
                 ));
                 match &x.ratings {
-                    Some(r) => out.push_str(&format!(
-                        "Game ratings: {} ({})\n",
-                        x.rating_labels.join(" "),
-                        r
-                    )),
+                    Some(r) => {
+                        let rated: Vec<&str> = x
+                            .rating_labels
+                            .iter()
+                            .filter(|l| !l.ends_with("=Unrated"))
+                            .map(String::as_str)
+                            .collect();
+                        if rated.is_empty() {
+                            out.push_str(&format!("Game ratings: Unrated ({r})\n"));
+                        } else {
+                            out.push_str(&format!("Game ratings: {} ({r})\n", rated.join(" ")));
+                        }
+                    }
                     None => out.push_str("Game ratings: not present\n"),
                 }
                 match &x.lan_key {
