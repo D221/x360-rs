@@ -339,6 +339,52 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 if let Some(n) = &x.pe_name {
                     out.push_str(&format!("Original PE name: {n}\n"));
                 }
+                if let Some(v) = x.image_flags {
+                    out.push_str(&format!(
+                        "Image flags: {v:08X}{}\n",
+                        if x.image_flag_names.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", x.image_flag_names.join(", "))
+                        }
+                    ));
+                }
+                if let Some(v) = x.allowed_media {
+                    out.push_str(&format!(
+                        "Allowed media: {v:08X}{}\n",
+                        if x.allowed_media_names.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", x.allowed_media_names.join(", "))
+                        }
+                    ));
+                }
+                if let Some(m) = &x.xgd2_media_id {
+                    out.push_str(&format!("XGD2 media ID: {m}\n"));
+                }
+                if let Some(v) = x.load_address {
+                    out.push_str(&format!("Load address: {v:08X}\n"));
+                }
+                if !x.page_descriptors.is_empty() {
+                    out.push_str(&format!(
+                        "Page descriptors ({}):\n",
+                        x.page_descriptors.len()
+                    ));
+                    for p in x.page_descriptors.iter().take(8) {
+                        out.push_str(&format!(
+                            "  info={:08X} pages={} digest={}…\n",
+                            p.info,
+                            p.page_count,
+                            &p.digest[..16.min(p.digest.len())]
+                        ));
+                    }
+                    if x.page_descriptors.len() > 8 {
+                        out.push_str(&format!(
+                            "  ... and {} more\n",
+                            x.page_descriptors.len() - 8
+                        ));
+                    }
+                }
             }
             out.push('\n');
         }

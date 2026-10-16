@@ -201,6 +201,39 @@ fn stfs_header_extended_fields_parse() {
 }
 
 #[test]
+fn xex_security_fields_parse() {
+    use crate::xex::{allowed_media_names, image_flag_names, parse_xex_extended_info};
+    assert_eq!(
+        image_flag_names(0x20000400),
+        vec!["UsermodeTitle", "RegionFree"]
+    );
+    assert_eq!(
+        allowed_media_names(0x00000018),
+        vec!["Dvd5", "Dvd9"]
+    );
+    // Synthetic header with a security-info area.
+    let mut buf = vec![0u8; 0x400];
+    buf[0..4].copy_from_slice(b"XEX2");
+    buf[20..24].copy_from_slice(&0u32.to_be_bytes());
+    buf[0x10..0x14].copy_from_slice(&0x200u32.to_be_bytes());
+    buf[0x200 + 0x10C..0x200 + 0x110].copy_from_slice(&0x20000400u32.to_be_bytes());
+    buf[0x200 + 0x110..0x200 + 0x114].copy_from_slice(&0x82000000u32.to_be_bytes());
+    buf[0x200 + 0x140..0x200 + 0x150].copy_from_slice(&[0xAAu8; 16]);
+    buf[0x200 + 0x17C..0x200 + 0x180].copy_from_slice(&0x18u32.to_be_bytes());
+    buf[0x200 + 0x180..0x200 + 0x184].copy_from_slice(&1u32.to_be_bytes());
+    buf[0x200 + 0x184..0x200 + 0x188].copy_from_slice(&0x10000003u32.to_be_bytes());
+    buf[0x200 + 0x188..0x200 + 0x19C].copy_from_slice(&[0xBBu8; 20]);
+    let info = parse_xex_extended_info(&buf, 0).expect("extended parses");
+    assert_eq!(info.image_flags, Some(0x20000400));
+    assert_eq!(info.allowed_media, Some(0x18));
+    assert_eq!(info.xgd2_media_id.as_deref(), Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+    assert_eq!(info.load_address, Some(0x82000000));
+    assert_eq!(info.page_descriptors.len(), 1);
+    assert_eq!(info.page_descriptors[0].page_count, 0x10000003 >> 4);
+    assert!(info.page_descriptors[0].digest.starts_with("BBBB"));
+}
+
+#[test]
 fn xex_extended_scalars_parse() {
     use crate::xex::parse_xex_extended_info;
     // Header with inline scalars, TLS, static lib and PE name.

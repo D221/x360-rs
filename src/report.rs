@@ -107,7 +107,7 @@ pub struct GameDirInfo {
 pub enum Report {
     Stfs(Box<TuInfo>),
     Xiso(IsoInfo),
-    Xex(XexFileInfo),
+    Xex(Box<XexFileInfo>),
     Xbe(XbeFileInfo),
     Xdbf(XdbfFileInfo),
     GameDir(GameDirInfo),

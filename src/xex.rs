@@ -23,6 +23,13 @@ pub struct XexExecInfo {
 /// (Free60 XEX doc): module flags, game ratings, LAN key,
 /// security-info region. All optional — absent entries yield `None`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XexPageDescriptor {
+    pub info: u32,
+    pub page_count: u32,
+    pub digest: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XexExtendedInfo {
     pub module_flags: u32,
     pub module_flag_names: Vec<String>,
@@ -45,6 +52,70 @@ pub struct XexExtendedInfo {
     pub tls: Option<XexTlsInfo>,
     pub static_libs: Vec<XexStaticLib>,
     pub pe_name: Option<String>,
+    pub image_flags: Option<u32>,
+    pub image_flag_names: Vec<String>,
+    pub allowed_media: Option<u32>,
+    pub allowed_media_names: Vec<String>,
+    pub xgd2_media_id: Option<String>,
+    pub load_address: Option<u32>,
+    pub page_descriptors: Vec<XexPageDescriptor>,
+}
+
+/// Image flag names (Xenia `xex2_image_flags`).
+pub fn image_flag_names(flags: u32) -> Vec<String> {
+    const NAMES: [(u32, &str); 18] = [
+        (0x00000002, "ManufacturingUtility"),
+        (0x00000004, "ManufacturingSupportTools"),
+        (0x00000008, "Xgd2MediaOnly"),
+        (0x00000100, "CardeaKey"),
+        (0x00000200, "XeikaKey"),
+        (0x00000400, "UsermodeTitle"),
+        (0x00000800, "UsermodeSystem"),
+        (0x00001000, "Orange0"),
+        (0x00002000, "Orange1"),
+        (0x00004000, "Orange2"),
+        (0x00010000, "IptvSignup"),
+        (0x00020000, "IptvTitle"),
+        (0x04000000, "KeyvaultPrivs"),
+        (0x08000000, "OnlineActivation"),
+        (0x10000000, "Page4K"),
+        (0x20000000, "RegionFree"),
+        (0x40000000, "RevocationOptional"),
+        (0x80000000, "RevocationRequired"),
+    ];
+    NAMES
+        .iter()
+        .filter(|(b, _)| flags & b != 0)
+        .map(|(_, n)| n.to_string())
+        .collect()
+}
+
+/// Allowed-media names (Xenia `xex2_media_flags`).
+pub fn allowed_media_names(media: u32) -> Vec<String> {
+    const NAMES: [(u32, &str); 17] = [
+        (0x00000001, "HardDisk"),
+        (0x00000002, "DvdX2"),
+        (0x00000004, "DvdCd"),
+        (0x00000008, "Dvd5"),
+        (0x00000010, "Dvd9"),
+        (0x00000020, "SystemFlash"),
+        (0x00000080, "MemoryUnit"),
+        (0x00000100, "UsbMassStorage"),
+        (0x00000200, "Network"),
+        (0x00000400, "DirectFromMemory"),
+        (0x00000800, "RamDrive"),
+        (0x00001000, "Svod"),
+        (0x01000000, "InsecurePackage"),
+        (0x02000000, "SavegamePackage"),
+        (0x04000000, "LocallySignedPackage"),
+        (0x08000000, "LiveSignedPackage"),
+        (0x10000000, "XboxPackage"),
+    ];
+    NAMES
+        .iter()
+        .filter(|(b, _)| media & b != 0)
+        .map(|(_, n)| n.to_string())
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -445,11 +516,54 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         }
     }
     // Security-info region: u32 at security-info offset + 0x178.
-    let security_region = u32_at(0x10).and_then(|off| {
-        let at = xex_offset.checked_add(off as usize)?.checked_add(0x178)?;
-        let b = buf.get(at..at.checked_add(4)?)?;
-        Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
+    // Companion fields share the same base: image flags +0x10C, load
+    // address +0x110, XGD2 media ID +0x140, allowed media +0x17C,
+    // page-descriptor count +0x180 with 24-byte records at +0x184
+    // (u32 info with low 4 bits section type + 28-bit page count,
+    // then the 20-byte data digest).
+    let sec = |off: usize, len: usize| -> Option<usize> {
+        let base = u32_at(0x10)? as usize;
+        let at = xex_offset.checked_add(base)?.checked_add(off)?;
+        if at + len > buf.len() {
+            return None;
+        }
+        Some(at)
+    };
+    let security_region = sec(0x178, 4)
+        .map(|at| u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]));
+    let image_flags = sec(0x10C, 4)
+        .map(|at| u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]));
+    let load_address = sec(0x110, 4)
+        .map(|at| u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]));
+    let xgd2_media_id = sec(0x140, 16).map(|at| {
+        buf[at..at + 16]
+            .iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join("")
     });
+    let allowed_media = sec(0x17C, 4)
+        .map(|at| u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]));
+    let mut page_descriptors = Vec::new();
+    if let Some(at) = sec(0x180, 4) {
+        let count = u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]) as usize;
+        for i in 0..count.min(4096) {
+            let base = at + 4 + i * 24;
+            if base + 24 > buf.len() {
+                break;
+            }
+            let info = u32::from_be_bytes([buf[base], buf[base + 1], buf[base + 2], buf[base + 3]]);
+            page_descriptors.push(XexPageDescriptor {
+                info,
+                page_count: info >> 4,
+                digest: buf[base + 4..base + 24]
+                    .iter()
+                    .map(|b| format!("{b:02X}"))
+                    .collect::<Vec<_>>()
+                    .join(""),
+            });
+        }
+    }
     let region_names = security_region
         .map(security_region_names)
         .unwrap_or_default();
@@ -482,6 +596,13 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         tls,
         static_libs,
         pe_name,
+        image_flags,
+        image_flag_names: image_flags.map(image_flag_names).unwrap_or_default(),
+        allowed_media,
+        allowed_media_names: allowed_media.map(allowed_media_names).unwrap_or_default(),
+        xgd2_media_id,
+        load_address,
+        page_descriptors,
     })
 }
 

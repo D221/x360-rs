@@ -39,12 +39,12 @@ pub fn parse_file(path: &PathBuf) -> Result<Report> {
         let mut reader = BufReader::new(&mut file);
         let win = read_window(&mut reader, 0, 0x40000, file_size)?;
         let exec = parse_xex_exec_info(&win, 0).context("XEX without ExecutionId")?;
-        return Ok(Report::Xex(XexFileInfo {
+        return Ok(Report::Xex(Box::new(XexFileInfo {
             file_path: path.display().to_string(),
             file_size,
             extended: parse_xex_extended_info(&win, 0),
             exec,
-        }));
+        })));
     }
     if &magic == b"XBEH" {
         drop(reader);
