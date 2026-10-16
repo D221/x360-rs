@@ -140,6 +140,51 @@ fn xex_exec_info_parses() {
 }
 
 #[test]
+fn stfs_thumbnails_parse_and_extract() {
+    use crate::tu_header::{sniff_image_format, TuHeader};
+    assert_eq!(sniff_image_format(b"\x89PNG\r\n\x1a\nrest"), "png");
+    assert_eq!(sniff_image_format(b"DDS rest"), "dds");
+    assert_eq!(sniff_image_format(b"BMrest"), "bmp");
+    assert_eq!(sniff_image_format(&[0xFF, 0xD8, 0xFF, 0x00]), "jpg");
+    assert_eq!(sniff_image_format(b"????"), "bin");
+    let dir = std::env::temp_dir().join(format!("tu_thumb_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("thumb.bin");
+    let mut buf = vec![0u8; 0xC0C0];
+    buf[0..4].copy_from_slice(b"LIVE");
+    buf[0x340..0x344].copy_from_slice(&0xAD0Eu32.to_be_bytes());
+    buf[0x344..0x348].copy_from_slice(&0x00000002u32.to_be_bytes());
+    buf[0x348..0x34C].copy_from_slice(&2u32.to_be_bytes());
+    buf[0x354..0x358].copy_from_slice(&0u32.to_be_bytes());
+    buf[0x360..0x364].copy_from_slice(&0x58410886u32.to_be_bytes());
+    buf[0x379] = 0x24;
+    buf[0x37C..0x37E].copy_from_slice(&1u16.to_le_bytes());
+    buf[0x395..0x399].copy_from_slice(&1u32.to_be_bytes());
+    let png = b"\x89PNG\r\n\x1a\nfakepngdata";
+    buf[0x1712..0x1716].copy_from_slice(&(png.len() as u32).to_be_bytes());
+    buf[0x1716..0x171A].copy_from_slice(&0u32.to_be_bytes());
+    buf[0x171A..0x171A + png.len()].copy_from_slice(png);
+    let title: Vec<u16> = "Thumb Game".encode_utf16().collect();
+    for (i, c) in title.iter().enumerate() {
+        buf[0x411 + i * 2..0x411 + i * 2 + 2].copy_from_slice(&c.to_be_bytes());
+    }
+    buf[0xC000..0xC00B].copy_from_slice(b"DSDLKey.bin");
+    buf[0xC000 + 0x28] = 0x40 | 11;
+    buf[0xC000 + 0x34..0xC000 + 0x38].copy_from_slice(&21u32.to_be_bytes());
+    std::fs::write(&path, &buf).unwrap();
+    let file = std::fs::File::open(&path).unwrap();
+    let mut reader = std::io::BufReader::new(file);
+    let h = TuHeader::read(&mut reader, buf.len() as u64).expect("header parses");
+    assert_eq!(h.metadata_version, 2);
+    assert_eq!(h.thumbnails.len(), 1);
+    assert_eq!(h.thumbnails[0].kind, "thumbnail");
+    assert_eq!(h.thumbnails[0].format, "png");
+    assert_eq!(h.thumbnails[0].size as usize, png.len());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn stfs_header_extended_fields_parse() {
     use crate::tu_header::TuHeader;
     let dir = std::env::temp_dir().join(format!("tu_stfshdr_{}", std::process::id()));
@@ -207,10 +252,7 @@ fn xex_security_fields_parse() {
         image_flag_names(0x20000400),
         vec!["UsermodeTitle", "RegionFree"]
     );
-    assert_eq!(
-        allowed_media_names(0x00000018),
-        vec!["Dvd5", "Dvd9"]
-    );
+    assert_eq!(allowed_media_names(0x00000018), vec!["Dvd5", "Dvd9"]);
     // Synthetic header with a security-info area.
     let mut buf = vec![0u8; 0x400];
     buf[0..4].copy_from_slice(b"XEX2");
@@ -226,7 +268,10 @@ fn xex_security_fields_parse() {
     let info = parse_xex_extended_info(&buf, 0).expect("extended parses");
     assert_eq!(info.image_flags, Some(0x20000400));
     assert_eq!(info.allowed_media, Some(0x18));
-    assert_eq!(info.xgd2_media_id.as_deref(), Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"));
+    assert_eq!(
+        info.xgd2_media_id.as_deref(),
+        Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+    );
     assert_eq!(info.load_address, Some(0x82000000));
     assert_eq!(info.page_descriptors.len(), 1);
     assert_eq!(info.page_descriptors[0].page_count, 0x10000003 >> 4);

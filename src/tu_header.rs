@@ -16,6 +16,30 @@ pub struct StfsLicense {
     pub flags: u32,
 }
 
+/// Dashboard thumbnail image (PNG/DDS/BMP as stored).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StfsThumbnail {
+    pub kind: String,
+    pub offset: u64,
+    pub size: u64,
+    pub format: String,
+}
+
+/// Sniff a dashboard image blob (PNG, DDS, BMP, JPEG).
+pub fn sniff_image_format(blob: &[u8]) -> &'static str {
+    if blob.starts_with(b"\x89PNG\r\n\x1a\n") {
+        "png"
+    } else if blob.starts_with(b"DDS ") {
+        "dds"
+    } else if blob.starts_with(b"BM") {
+        "bmp"
+    } else if blob.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "jpg"
+    } else {
+        "bin"
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuHeader {
     pub magic: u32,                   // 0x0000: "LIVE" (LE u32 0x4556494C)
@@ -34,9 +58,11 @@ pub struct TuHeader {
     pub data_file_count: u32, // 0x039D: BE u32
     pub data_file_combined_size: u64, // 0x03A1: BE u64
     pub descriptor_type: u32, // 0x03A9: 0 = STFS, 1 = SVOD
+    pub metadata_version: u32, // 0x0348: BE u32 (v1/v2 thumbnail layout)
     pub transfer_flags: u8, // 0x1711
     pub transfer_flag_names: Vec<String>,
     pub licenses: Vec<StfsLicense>, // 16x16B at 0x022C, non-zero only
+    pub thumbnails: Vec<StfsThumbnail>, // dashboard images at 0x171A/0x571A
     pub xex_offset: Option<u64>,    // file offset of embedded "XEX2", if any
     pub region_mask: Option<u32>,   // BE u32 at xex_offset + 0x1A0 (TU patch XEX only)
     pub xex_exec: Option<XexExecInfo>, // ExecutionId from full game XEX (XBLA etc.)
@@ -83,6 +109,8 @@ impl TuHeader {
 
         reader.seek(SeekFrom::Start(0x0344))?;
         let content_type = reader.read_u32::<BigEndian>()?;
+        reader.seek(SeekFrom::Start(0x0348))?;
+        let metadata_version = reader.read_u32::<BigEndian>()?;
 
         reader.seek(SeekFrom::Start(0x0354))?;
         let media_id = reader.read_u32::<BigEndian>()?;
@@ -133,6 +161,28 @@ impl TuHeader {
                     id: format!("{id:016X}"),
                     bits,
                     flags,
+                });
+            }
+        }
+
+        // Dashboard thumbnails: sizes at 0x1712/0x1716, blobs at
+        // 0x171A/0x571A (both metadata versions; v2 raises the caps).
+        let mut thumbnails = Vec::new();
+        for (kind, size_off, data_off) in [
+            ("thumbnail", 0x1712u64, 0x171Au64),
+            ("title", 0x1716, 0x571A),
+        ] {
+            reader.seek(SeekFrom::Start(size_off))?;
+            let size = reader.read_u32::<BigEndian>()? as u64;
+            if size > 0 && data_off + size <= file_size {
+                reader.seek(SeekFrom::Start(data_off))?;
+                let mut head = vec![0u8; size.min(16) as usize];
+                reader.read_exact(&mut head)?;
+                thumbnails.push(StfsThumbnail {
+                    kind: kind.to_string(),
+                    offset: data_off,
+                    size,
+                    format: sniff_image_format(&head).to_string(),
                 });
             }
         }
@@ -194,9 +244,11 @@ impl TuHeader {
             data_file_count,
             data_file_combined_size,
             descriptor_type,
+            metadata_version,
             transfer_flags,
             transfer_flag_names: transfer_flag_names(transfer_flags),
             licenses,
+            thumbnails,
             xex_offset,
             region_mask,
             xex_exec,

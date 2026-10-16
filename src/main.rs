@@ -535,7 +535,7 @@ fn main() -> Result<()> {
                 if args.verbose {
                     eprintln!("  -> {}", report_summary(&Report::Stfs(info.clone())));
                 }
-                if args.verify || args.extract.is_some() {
+                if args.verify || args.extract.is_some() || args.extract_thumbnail.is_some() {
                     match open_stfs_reader(file_path) {
                         Ok((mut reader, file_size)) => {
                             if args.verify {
@@ -574,6 +574,25 @@ fn main() -> Result<()> {
                                         failures += 1;
                                         eprintln!(
                                             "warning: extract {}: {:#}",
+                                            file_path.display(),
+                                            e
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
+                            if let Some(thumbdir) = &args.extract_thumbnail {
+                                match crate::stfs::extract_thumbnails(&mut reader, &info, thumbdir)
+                                {
+                                    Ok(n) => {
+                                        if args.verbose {
+                                            eprintln!("  extracted {n} thumbnails");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        failures += 1;
+                                        eprintln!(
+                                            "warning: thumbnails {}: {:#}",
                                             file_path.display(),
                                             e
                                         );

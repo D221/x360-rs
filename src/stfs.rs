@@ -521,6 +521,30 @@ pub(crate) fn open_stfs_reader(path: &PathBuf) -> Result<(BufReader<File>, u64)>
     Ok((BufReader::new(file), file_size))
 }
 
+/// Extract dashboard thumbnails of a parsed STFS report into `out_dir`,
+/// named `<base-title-id>_<kind>.<format>`. Returns files written.
+pub(crate) fn extract_thumbnails(
+    reader: &mut (impl Read + Seek),
+    info: &TuInfo,
+    out_dir: &Path,
+) -> Result<u64> {
+    use crate::tu_header::sniff_image_format;
+    std::fs::create_dir_all(out_dir)?;
+    let mut count = 0u64;
+    for t in &info.thumbnails {
+        let dest = out_dir.join(format!(
+            "{}_{}.{}",
+            sanitize_dir_name(&info.base_title_id),
+            t.kind,
+            sniff_image_format(&read_at(reader, t.offset, t.size.min(64) as usize)?)
+        ));
+        let data = read_at(reader, t.offset, t.size as usize)?;
+        std::fs::write(&dest, &data)?;
+        count += 1;
+    }
+    Ok(count)
+}
+
 /// Extract one parsed STFS report into `out_dir`, recreating the tree.
 /// Every block hash is verified during the walk; any failure aborts and
 /// removes the partial file.

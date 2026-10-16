@@ -80,6 +80,7 @@ impl TuParser {
                 1 => "SVOD".to_string(),
                 t => format!("Unknown({t})"),
             },
+            metadata_version: header.metadata_version,
             transfer_flags: if header.transfer_flag_names.is_empty() {
                 format!("{:02X}", header.transfer_flags)
             } else {
@@ -94,6 +95,7 @@ impl TuParser {
                 .iter()
                 .map(|l| format!("{} bits={:08X} flags={:08X}", l.id, l.bits, l.flags))
                 .collect(),
+            thumbnails: header.thumbnails,
             display_title: header.display_title,
             region_mask: header.region_mask.map(|m| format!("{:08X}", m)),
             regions_detailed: detailed,

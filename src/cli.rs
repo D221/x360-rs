@@ -52,6 +52,11 @@ pub(crate) struct Args {
     #[arg(long, value_name = "OUTDIR", help_heading = "STFS")]
     pub extract: Option<PathBuf>,
 
+    /// Extract STFS dashboard thumbnails into OUTDIR as
+    /// `<base-title-id>_<kind>.<format>` files.
+    #[arg(long, value_name = "OUTDIR", help_heading = "STFS")]
+    pub extract_thumbnail: Option<PathBuf>,
+
     /// Extract XISO contents into OUTDIR (fast, multi-method).
     #[arg(
         long,

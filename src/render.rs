@@ -74,6 +74,7 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 info.version, info.base_version
             ));
             out.push_str(&format!("Descriptor: {}\n", info.descriptor_type));
+            out.push_str(&format!("Metadata version: {}\n", info.metadata_version));
             out.push_str(&format!(
                 "Data files: {} ({})\n",
                 info.data_file_count,
@@ -84,6 +85,18 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 out.push_str(&format!("Licenses ({}):\n", info.licenses.len()));
                 for l in info.licenses.iter().take(16) {
                     out.push_str(&format!("  {l}\n"));
+                }
+            }
+            if !info.thumbnails.is_empty() {
+                out.push_str("Thumbnails:\n");
+                for t in &info.thumbnails {
+                    out.push_str(&format!(
+                        "  {} | Offset: 0x{:X} | Size: {} ({})\n",
+                        t.kind,
+                        t.offset,
+                        format_size(t.size),
+                        t.format
+                    ));
                 }
             }
             if info.save_game_id != "00000000" {
