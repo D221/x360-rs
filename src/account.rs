@@ -53,9 +53,7 @@ impl Rc4 {
         }
         let mut j: u8 = 0;
         for i in 0..256 {
-            j = j
-                .wrapping_add(s[i])
-                .wrapping_add(key[i % key.len()]);
+            j = j.wrapping_add(s[i]).wrapping_add(key[i % key.len()]);
             s.swap(i, j as usize);
         }
         Rc4 { s, i: 0, j: 0 }
@@ -66,8 +64,8 @@ impl Rc4 {
             self.i = self.i.wrapping_add(1);
             self.j = self.j.wrapping_add(self.s[self.i as usize]);
             self.s.swap(self.i as usize, self.j as usize);
-            let k = self.s
-                [(self.s[self.i as usize].wrapping_add(self.s[self.j as usize])) as usize];
+            let k =
+                self.s[(self.s[self.i as usize].wrapping_add(self.s[self.j as usize])) as usize];
             *byte ^= k;
         }
     }
@@ -90,12 +88,15 @@ fn hmac_sha1(key: &[u8], data: &[u8]) -> [u8; 20] {
 /// 3. Remaining bytes (16 to end) decrypted with derived RC4 key
 pub fn decrypt_account(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() < 32 {
-        anyhow::bail!("Account file too small ({} bytes, need at least 32)", data.len());
+        anyhow::bail!(
+            "Account file too small ({} bytes, need at least 32)",
+            data.len()
+        );
     }
 
     const BOOTSTRAP_KEY: &[u8] = &[
-        0xE1, 0xBC, 0x15, 0x9C, 0x73, 0xB1, 0xEA, 0xE9,
-        0xAB, 0x31, 0x70, 0xF3, 0xAD, 0x47, 0xEB, 0xF3,
+        0xE1, 0xBC, 0x15, 0x9C, 0x73, 0xB1, 0xEA, 0xE9, 0xAB, 0x31, 0x70, 0xF3, 0xAD, 0x47, 0xEB,
+        0xF3,
     ];
 
     // Step 1: HMAC-SHA1(key=BOOTSTRAP_KEY, msg=first_16_bytes_of_file) → 20 bytes
