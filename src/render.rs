@@ -198,9 +198,12 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
             ));
             out.push_str(&format!("Volume sectors: {}\n", info.volume_sectors));
             if let Some(ts) = info.volume_timestamp {
-                // Convert Windows FILETIME (100ns intervals since 1601-01-01) to readable format
-                // For now just show the raw value; could use chrono for conversion
-                out.push_str(&format!("Volume timestamp: {} (FILETIME)\n", ts));
+                // Windows FILETIME (100ns intervals since 1601-01-01 UTC),
+                // converted without extra deps (same algorithm as gpd.rs).
+                let readable = crate::gpd::filetime_string(ts)
+                    .map(|s| format!(" = {s}"))
+                    .unwrap_or_default();
+                out.push_str(&format!("Volume timestamp: {ts} (FILETIME){readable}\n"));
             }
             match &info.executable {
                 Some(e) => out.push_str(&format!("Executable: {}\n", e)),

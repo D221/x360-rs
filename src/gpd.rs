@@ -128,7 +128,7 @@ fn utf16_strings(blob: &[u8]) -> Vec<String> {
 }
 
 /// Windows FILETIME to `YYYY-MM-DD HH:MM:SS` (days-from-civil, no deps).
-fn filetime_string(ft: u64) -> Option<String> {
+pub(crate) fn filetime_string(ft: u64) -> Option<String> {
     if ft == 0 || ft == u64::MAX {
         return None;
     }
