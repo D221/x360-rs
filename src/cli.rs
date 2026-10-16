@@ -99,11 +99,38 @@ pub(crate) struct Args {
             "md5",
             "checksum",
             "bench_extract_iso",
-            "dump_basefile"
+            "dump_basefile",
+            "dump_account"
         ],
         help_heading = "XEX"
     )]
     pub dump_resources: Option<PathBuf>,
+
+    /// Decrypt and dump an Xbox 360 Profile Account file.
+    /// Use with a single Account file input; `-o/--output` sets the destination
+    /// for the decrypted JSON report (default: stdout).
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with_all = [
+            "extract",
+            "extract_thumbnail",
+            "extract_iso",
+            "optimize",
+            "create",
+            "truncate",
+            "game_dir",
+            "dir",
+            "copy_out",
+            "md5",
+            "checksum",
+            "bench_extract_iso",
+            "dump_basefile",
+            "dump_resources"
+        ],
+        help_heading = "Profile"
+    )]
+    pub dump_account: Option<PathBuf>,
 
     /// Extract XISO contents into OUTDIR (fast, multi-method).
     #[arg(

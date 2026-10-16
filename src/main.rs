@@ -1,5 +1,6 @@
 //! Xbox 360 container and image parser (STFS, XISO, XEX, GoD).
 
+mod account;
 mod cli;
 mod constants;
 mod extract;
@@ -277,6 +278,31 @@ fn main() -> Result<()> {
                 anyhow::bail!("copy-out {}: {:#}", input.display(), e);
             }
         }
+    }
+
+    // Account mode: decrypt and dump an Xbox 360 Profile Account file.
+    if let Some(account_path) = &args.dump_account {
+        let meta = std::fs::metadata(account_path)
+            .with_context(|| format!("cannot stat {}", account_path.display()))?;
+        let mut data = vec![0u8; meta.len() as usize];
+        let mut f = std::fs::File::open(account_path)
+            .with_context(|| format!("cannot open {}", account_path.display()))?;
+        use std::io::Read as _;
+        f.read_exact(&mut data)?;
+        let decrypted = crate::account::decrypt_account(&data)?;
+        let info = crate::account::parse_account(&decrypted)?;
+        let redacted = crate::account::redact_account(&info);
+        if let Some(dest) = &args.output {
+            let json = serde_json::to_string_pretty(&redacted)?;
+            std::fs::write(dest, &json)?;
+            if !args.quiet {
+                eprintln!("dumped account to {}", dest.display());
+            }
+        } else {
+            let json = serde_json::to_string_pretty(&redacted)?;
+            println!("{json}");
+        }
+        return Ok(());
     }
 
     // Create mode: build a new XISO from an extracted game directory.

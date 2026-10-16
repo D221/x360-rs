@@ -11,7 +11,7 @@ byteorder = "1.5"
 clap = { version = "4.5", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sha1 = "0.11"
+sha1 = "0.10"
 thiserror = "2.0"
 libc = { version = "0.2", optional = true }
 windows = { version = "0.62", optional = true, features = [
@@ -21,6 +21,7 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_Security",
 ] }
 md5 = "0.8.1"
+hmac = "0.12"
 sha3 = "0.12.0"
 wax = "0.7.0"
 
