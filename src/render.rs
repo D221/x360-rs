@@ -65,6 +65,39 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 "Bootable: {}\n",
                 if info.bootable { "YES" } else { "NO" }
             ));
+            out.push_str(&format!(
+                "Content size: {}\n",
+                format_size(info.content_size)
+            ));
+            out.push_str(&format!(
+                "Version: {} (base {})\n",
+                info.version, info.base_version
+            ));
+            out.push_str(&format!("Descriptor: {}\n", info.descriptor_type));
+            out.push_str(&format!(
+                "Data files: {} ({})\n",
+                info.data_file_count,
+                format_size(info.data_file_combined_size)
+            ));
+            out.push_str(&format!("Transfer flags: {}\n", info.transfer_flags));
+            if !info.licenses.is_empty() {
+                out.push_str(&format!("Licenses ({}):\n", info.licenses.len()));
+                for l in info.licenses.iter().take(16) {
+                    out.push_str(&format!("  {l}\n"));
+                }
+            }
+            if info.save_game_id != "00000000" {
+                out.push_str(&format!("Save game ID: {}\n", info.save_game_id));
+            }
+            if info.console_id.chars().any(|c| c != '0') {
+                out.push_str(&format!("Console ID: {}\n", info.console_id));
+            }
+            if info.profile_id.chars().any(|c| c != '0') {
+                out.push_str(&format!("Profile ID: {}\n", info.profile_id));
+            }
+            if info.device_id.chars().any(|c| c != '0') {
+                out.push_str(&format!("Device ID: {}\n", info.device_id));
+            }
             out.push_str(&format!("Title: {}\n", info.display_title));
             out.push_str(&format!(
                 "Region mask: {}\n",
@@ -259,6 +292,52 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                     for h in &x.headers {
                         out.push_str(&format!("  {}: {}\n", h.id, h.data));
                     }
+                }
+                if let Some(v) = x.entry_point {
+                    out.push_str(&format!("Entry point: {v:08X}\n"));
+                }
+                if let Some(v) = x.image_base {
+                    out.push_str(&format!("Image base: {v:08X}\n"));
+                }
+                if let Some(v) = x.original_base {
+                    out.push_str(&format!("Original base: {v:08X}\n"));
+                }
+                if let Some(v) = x.stack_size {
+                    out.push_str(&format!("Stack size: {}\n", format_size(v as u64)));
+                }
+                if let Some(v) = x.heap_size {
+                    out.push_str(&format!("Heap size: {}\n", format_size(v as u64)));
+                }
+                if let Some(v) = x.fs_cache_size {
+                    out.push_str(&format!("FS cache size: {}\n", format_size(v as u64)));
+                }
+                if let Some(v) = x.system_flags {
+                    out.push_str(&format!(
+                        "System flags: {v:08X}{}\n",
+                        if x.system_flag_names.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", x.system_flag_names.join(", "))
+                        }
+                    ));
+                }
+                if let Some(t) = &x.tls {
+                    out.push_str(&format!(
+                        "TLS: {} slots, data {:08X} ({} / raw {})\n",
+                        t.slots,
+                        t.data_address,
+                        format_size(t.data_size as u64),
+                        format_size(t.raw_size as u64)
+                    ));
+                }
+                if !x.static_libs.is_empty() {
+                    out.push_str(&format!("Static libs ({}):\n", x.static_libs.len()));
+                    for l in x.static_libs.iter().take(20) {
+                        out.push_str(&format!("  {} {} ({})\n", l.name, l.version, l.approval));
+                    }
+                }
+                if let Some(n) = &x.pe_name {
+                    out.push_str(&format!("Original PE name: {n}\n"));
                 }
             }
             out.push('\n');

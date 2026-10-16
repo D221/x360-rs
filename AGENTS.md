@@ -52,7 +52,7 @@ tu_parser/
 │   ├── parse.rs          # Top-level parse dispatch (file magic to STFS/XISO/XEX/XBE/game-dir)
 │   ├── stfs.rs           # STFS parsing, hash verification, extraction
 │   ├── iso.rs            # XISO/GDF parsing + is_systemupdate_path() matcher
-│   ├── xex.rs            # XEX ExecutionId parsing + extended header info (module flags, ratings 0x40310, LAN key, security region); ratings/regions decoded via Xenia xex2_info.h tables, unknown values stay hex
+│   ├── xex.rs            # XEX ExecutionId parsing + extended header info (module/system flags, ratings 0x40310, LAN key, security region, entry/base addresses, stack/heap, TLS, static libs, PE name, raw header table); ratings/regions decoded via Xenia xex2_info.h tables, unknown values stay hex
 │   ├── tu_parser.rs      # TU-specific STFS parsing (header, file table, XEX region mask)
 │   ├── tu_header.rs      # STFS/CON header field extraction
 │   ├── regions.rs        # Region mask bit decoding (matches original Title Update Checker)

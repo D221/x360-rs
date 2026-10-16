@@ -140,6 +140,115 @@ fn xex_exec_info_parses() {
 }
 
 #[test]
+fn stfs_header_extended_fields_parse() {
+    use crate::tu_header::TuHeader;
+    let dir = std::env::temp_dir().join(format!("tu_stfshdr_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("hdr.bin");
+    let mut buf = vec![0u8; 0xC0C0];
+    buf[0..4].copy_from_slice(b"LIVE");
+    buf[0x344..0x348].copy_from_slice(&0x00000002u32.to_be_bytes());
+    buf[0x34C..0x354].copy_from_slice(&0x123456789ABCDEF0u64.to_be_bytes());
+    buf[0x354..0x358].copy_from_slice(&0u32.to_be_bytes());
+    buf[0x358..0x35C].copy_from_slice(&0x00000005u32.to_be_bytes());
+    buf[0x35C..0x360].copy_from_slice(&0x00000003u32.to_be_bytes());
+    buf[0x360..0x364].copy_from_slice(&0x434307D2u32.to_be_bytes());
+    buf[0x368..0x36C].copy_from_slice(&0xAABBCCDDu32.to_be_bytes());
+    buf[0x36C..0x371].copy_from_slice(&[1, 2, 3, 4, 5]);
+    buf[0x371..0x379].copy_from_slice(&[6, 7, 8, 9, 10, 11, 12, 13]);
+    buf[0x379] = 0x24;
+    buf[0x37C..0x37E].copy_from_slice(&1u16.to_le_bytes());
+    buf[0x395..0x399].copy_from_slice(&1u32.to_be_bytes());
+    buf[0x39D..0x3A1].copy_from_slice(&7u32.to_be_bytes());
+    buf[0x3A1..0x3A9].copy_from_slice(&0x0102030405060708u64.to_be_bytes());
+    buf[0x3A9..0x3AD].copy_from_slice(&1u32.to_be_bytes());
+    buf[0x3FD..0x411].copy_from_slice(&[0xFFu8; 0x14]);
+    buf[0x1711] = 0b00110100; // Kinect + MoveOnly + DeepLink
+    // One license slot: id + bits + flags.
+    buf[0x22C..0x234].copy_from_slice(&0x1122334455667788u64.to_be_bytes());
+    buf[0x234..0x238].copy_from_slice(&0xFFFFFFFFu32.to_be_bytes());
+    buf[0x238..0x23C].copy_from_slice(&0x00000001u32.to_be_bytes());
+    let title: Vec<u16> = "Miami Nights Key".encode_utf16().collect();
+    for (i, c) in title.iter().enumerate() {
+        buf[0x411 + i * 2..0x411 + i * 2 + 2].copy_from_slice(&c.to_be_bytes());
+    }
+    buf[0xC000..0xC00B].copy_from_slice(b"DSDLKey.bin");
+    buf[0xC000 + 0x28] = 0x40 | 11;
+    buf[0xC000 + 0x34..0xC000 + 0x38].copy_from_slice(&21u32.to_be_bytes());
+    std::fs::write(&path, &buf).unwrap();
+    let file = std::fs::File::open(&path).unwrap();
+    let mut reader = std::io::BufReader::new(file);
+    let h = TuHeader::read(&mut reader, buf.len() as u64).expect("header parses");
+    assert_eq!(h.content_size, 0x123456789ABCDEF0);
+    assert_eq!(h.version, 5);
+    assert_eq!(h.base_version, 3);
+    assert_eq!(h.save_game_id, 0xAABBCCDD);
+    assert_eq!(h.console_id, "0102030405");
+    assert_eq!(h.profile_id, "060708090A0B0C0D");
+    assert_eq!(h.device_id, "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF");
+    assert_eq!(h.data_file_count, 7);
+    assert_eq!(h.data_file_combined_size, 0x0102030405060708);
+    assert_eq!(h.descriptor_type, 1);
+    assert_eq!(
+        crate::tu_header::transfer_flag_names(0b00110100),
+        vec!["DeepLink", "Kinect", "MoveOnly"]
+    );
+    assert_eq!(h.licenses.len(), 1);
+    assert_eq!(h.licenses[0].id, "1122334455667788");
+    assert_eq!(h.licenses[0].bits, 0xFFFFFFFF);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn xex_extended_scalars_parse() {
+    use crate::xex::parse_xex_extended_info;
+    // Header with inline scalars, TLS, static lib and PE name.
+    let mut buf = vec![0u8; 0x400];
+    buf[0..4].copy_from_slice(b"XEX2");
+    buf[20..24].copy_from_slice(&6u32.to_be_bytes());
+    let mut at = 0x40;
+    // 0x10100 entry point (inline).
+    buf[24..28].copy_from_slice(&0x00010100u32.to_be_bytes());
+    buf[28..32].copy_from_slice(&0x82123456u32.to_be_bytes());
+    // 0x10201 image base (inline).
+    buf[32..36].copy_from_slice(&0x00010201u32.to_be_bytes());
+    buf[36..40].copy_from_slice(&0x82000000u32.to_be_bytes());
+    // 0x20104 TLS at `at`.
+    buf[40..44].copy_from_slice(&0x00020104u32.to_be_bytes());
+    buf[44..48].copy_from_slice(&(at as u32).to_be_bytes());
+    buf[at..at + 4].copy_from_slice(&9u32.to_be_bytes());
+    buf[at + 4..at + 8].copy_from_slice(&0x82200000u32.to_be_bytes());
+    buf[at + 8..at + 12].copy_from_slice(&0x1000u32.to_be_bytes());
+    buf[at + 12..at + 16].copy_from_slice(&0x2000u32.to_be_bytes());
+    at += 16;
+    // 0x200FF static libs at `at`: size + one 0x10 record.
+    buf[48..52].copy_from_slice(&0x000200FFu32.to_be_bytes());
+    buf[52..56].copy_from_slice(&(at as u32).to_be_bytes());
+    buf[at..at + 4].copy_from_slice(&0x14u32.to_be_bytes());
+    buf[at + 4..at + 12].copy_from_slice(b"xboxkrnl");
+    buf[at + 16..at + 18].copy_from_slice(&0x0258u16.to_be_bytes());
+    buf[at + 18] = 2;
+    buf[at + 19] = 0;
+    at += 0x14;
+    // 0x183FF PE name at `at`.
+    buf[56..60].copy_from_slice(&0x000183FFu32.to_be_bytes());
+    buf[60..64].copy_from_slice(&(at as u32).to_be_bytes());
+    buf[at..at + 4].copy_from_slice(&0x10u32.to_be_bytes());
+    buf[at + 4..at + 12].copy_from_slice(b"game.exe");
+    let info = parse_xex_extended_info(&buf, 0).expect("extended parses");
+    assert_eq!(info.entry_point, Some(0x82123456));
+    assert_eq!(info.image_base, Some(0x82000000));
+    let tls = info.tls.expect("tls parses");
+    assert_eq!((tls.slots, tls.data_size, tls.raw_size), (9, 0x1000, 0x2000));
+    assert_eq!(info.static_libs.len(), 1);
+    assert_eq!(info.static_libs[0].name, "xboxkrnl");
+    assert_eq!(info.static_libs[0].approval, "Approved");
+    assert_eq!(info.pe_name.as_deref(), Some("game.exe"));
+    assert_eq!(info.headers.len(), 6);
+}
+
+#[test]
 fn title_id_classification_matches_xenia() {
     use crate::title_id::*;
     // Mirrors static_asserts in xenia title_id_utils.h.

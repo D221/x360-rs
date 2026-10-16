@@ -34,6 +34,75 @@ pub struct XexExtendedInfo {
     /// Every optional-header entry as `(ID, data)` hex, including ones with
     /// no dedicated decoder (Xenia `UserModule::Dump` default arm).
     pub headers: Vec<XexHeaderEntry>,
+    pub entry_point: Option<u32>,
+    pub image_base: Option<u32>,
+    pub original_base: Option<u32>,
+    pub stack_size: Option<u32>,
+    pub heap_size: Option<u32>,
+    pub fs_cache_size: Option<u32>,
+    pub system_flags: Option<u32>,
+    pub system_flag_names: Vec<String>,
+    pub tls: Option<XexTlsInfo>,
+    pub static_libs: Vec<XexStaticLib>,
+    pub pe_name: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XexTlsInfo {
+    pub slots: u32,
+    pub data_address: u32,
+    pub data_size: u32,
+    pub raw_size: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XexStaticLib {
+    pub name: String,
+    pub version: String,
+    pub approval: String,
+}
+
+/// System flag names (Xenia `xex2_system_flags`).
+pub fn system_flag_names(flags: u32) -> Vec<String> {
+    const NAMES: [(u32, &str); 32] = [
+        (0x00000001, "NoForcedReboot"),
+        (0x00000002, "ForegroundTasks"),
+        (0x00000004, "NoOddMapping"),
+        (0x00000008, "HandleMceInput"),
+        (0x00000010, "RestrictedHud"),
+        (0x00000020, "HandleGamepadDisconnect"),
+        (0x00000040, "InsecureSockets"),
+        (0x00000080, "Xbox1Interop"),
+        (0x00000100, "DashContext"),
+        (0x00000200, "GameVoiceChannel"),
+        (0x00000400, "Pal50Incompatible"),
+        (0x00000800, "InsecureUtilityDrive"),
+        (0x00001000, "XamHooks"),
+        (0x00002000, "AccessPii"),
+        (0x00004000, "CrossPlatformLink"),
+        (0x00008000, "MultidiscSwap"),
+        (0x00010000, "MultidiscInsecureMedia"),
+        (0x00020000, "Ap25Media"),
+        (0x00040000, "NoConfirmExit"),
+        (0x00080000, "BackgroundDownload"),
+        (0x00100000, "PersistableRamdrive"),
+        (0x00200000, "InheritRamdrive"),
+        (0x00400000, "HudVibration"),
+        (0x00800000, "UtilityPartitions"),
+        (0x01000000, "IptvInput"),
+        (0x02000000, "BigButtonInput"),
+        (0x04000000, "ExtendedReservation"),
+        (0x08000000, "MultidiscCrossTitle"),
+        (0x10000000, "InstallIncompatible"),
+        (0x20000000, "AvatarMetadataByXuid"),
+        (0x40000000, "ControllerSwapping"),
+        (0x80000000, "DashExtensibility"),
+    ];
+    NAMES
+        .iter()
+        .filter(|(b, _)| flags & b != 0)
+        .map(|(_, n)| n.to_string())
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +313,18 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
     let mut rating_bytes: Option<[u8; 12]> = None;
     let mut lan_key = None;
     let mut headers = Vec::new();
+    // Scalar inline values keyed by header ID (verified on real files:
+    // e.g. entry point reads as an 0x82xxxxxx address, stack as 0x40000).
+    let mut entry_point = None;
+    let mut image_base = None;
+    let mut original_base = None;
+    let mut stack_size = None;
+    let mut heap_size = None;
+    let mut fs_cache_size = None;
+    let mut system_flags = None;
+    let mut tls = None;
+    let mut static_libs = Vec::new();
+    let mut pe_name = None;
     for i in 0..field_count {
         let base = xex_offset.checked_add(24 + i * 8)?;
         if base + 8 > buf.len() {
@@ -286,6 +367,80 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
                     );
                 }
             }
+            // Inline u32 scalars (verified on real files).
+            0x00010001 => original_base = Some(val),
+            0x00010100 => entry_point = Some(val),
+            0x00010201 => image_base = Some(val),
+            0x00020200 => stack_size = Some(val),
+            0x00020301 => fs_cache_size = Some(val),
+            0x00020401 => heap_size = Some(val),
+            0x00030000 => system_flags = Some(val),
+            // TLS info: 16 bytes at entry offset.
+            0x00020104 => {
+                if let Some(e) = data_at(16) {
+                    let u = |o: usize| {
+                        u32::from_be_bytes([
+                            buf[e + o],
+                            buf[e + o + 1],
+                            buf[e + o + 2],
+                            buf[e + o + 3],
+                        ])
+                    };
+                    tls = Some(XexTlsInfo {
+                        slots: u(0),
+                        data_address: u(4),
+                        data_size: u(8),
+                        raw_size: u(12),
+                    });
+                }
+            }
+            // Static libraries: size-prefixed, 0x10-byte records.
+            0x000200FF => {
+                if let Some(e) = data_at(4) {
+                    let total =
+                        u32::from_be_bytes([buf[e], buf[e + 1], buf[e + 2], buf[e + 3]]) as usize;
+                    let mut off = e + 4;
+                    let end = e + total.min(buf.len().saturating_sub(e));
+                    while off + 0x10 <= end {
+                        let name = String::from_utf8_lossy(&buf[off..off + 8])
+                            .trim_end_matches('\0')
+                            .to_string();
+                        let approval = match buf[off + 0xE] {
+                            0 => "Unapproved",
+                            1 => "Possible",
+                            2 => "Approved",
+                            3 => "Expired",
+                            _ => "?",
+                        }
+                        .to_string();
+                        static_libs.push(XexStaticLib {
+                            name,
+                            version: format!(
+                                "{}.{}.{}.{}",
+                                u16::from_be_bytes([buf[off + 8], buf[off + 9]]),
+                                u16::from_be_bytes([buf[off + 10], buf[off + 11]]),
+                                u16::from_be_bytes([buf[off + 12], buf[off + 13]]),
+                                buf[off + 0xF],
+                            ),
+                            approval,
+                        });
+                        off += 0x10;
+                    }
+                }
+            }
+            // Original PE name: size-prefixed NUL-terminated string.
+            0x000183FF => {
+                if let Some(e) = data_at(4) {
+                    let total =
+                        u32::from_be_bytes([buf[e], buf[e + 1], buf[e + 2], buf[e + 3]]) as usize;
+                    let str_end = (e + total).min(buf.len());
+                    let mut s_end = e + 4;
+                    while s_end < str_end && buf[s_end] != 0 {
+                        s_end += 1;
+                    }
+                    pe_name = Some(String::from_utf8_lossy(&buf[e + 4..s_end]).to_string());
+                }
+            }
             _ => {}
         }
     }
@@ -316,6 +471,17 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         security_region,
         region_names,
         headers,
+        entry_point,
+        image_base,
+        original_base,
+        stack_size,
+        heap_size,
+        fs_cache_size,
+        system_flags,
+        system_flag_names: system_flags.map(system_flag_names).unwrap_or_default(),
+        tls,
+        static_libs,
+        pe_name,
     })
 }
 

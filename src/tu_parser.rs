@@ -66,6 +66,34 @@ impl TuParser {
             base_title_id: format!("{:08X}", header.base_title_id),
             content_type: format!("0x{:08X}", header.content_type),
             bootable: crate::constants::content_type_is_bootable(header.content_type),
+            content_size: header.content_size,
+            version: format!("{:08X}", header.version),
+            base_version: format!("{:08X}", header.base_version),
+            save_game_id: format!("{:08X}", header.save_game_id),
+            console_id: header.console_id,
+            profile_id: header.profile_id,
+            device_id: header.device_id,
+            data_file_count: header.data_file_count,
+            data_file_combined_size: header.data_file_combined_size,
+            descriptor_type: match header.descriptor_type {
+                0 => "STFS".to_string(),
+                1 => "SVOD".to_string(),
+                t => format!("Unknown({t})"),
+            },
+            transfer_flags: if header.transfer_flag_names.is_empty() {
+                format!("{:02X}", header.transfer_flags)
+            } else {
+                format!(
+                    "{:02X} ({})",
+                    header.transfer_flags,
+                    header.transfer_flag_names.join(", ")
+                )
+            },
+            licenses: header
+                .licenses
+                .iter()
+                .map(|l| format!("{} bits={:08X} flags={:08X}", l.id, l.bits, l.flags))
+                .collect(),
             display_title: header.display_title,
             region_mask: header.region_mask.map(|m| format!("{:08X}", m)),
             regions_detailed: detailed,

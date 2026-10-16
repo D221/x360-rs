@@ -10,16 +10,53 @@ use crate::constants::{TuError, CONTENT_TITLE_UPDATE, MAGIC_CON, MAGIC_LIVE, MAG
 use crate::xex::{find_xex_offset, parse_xex_exec_info, read_at, XexExecInfo};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StfsLicense {
+    pub id: String,
+    pub bits: u32,
+    pub flags: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuHeader {
-    pub magic: u32,                    // 0x0000: "LIVE" (LE u32 0x4556494C)
+    pub magic: u32,                   // 0x0000: "LIVE" (LE u32 0x4556494C)
     pub tu_signature: Option<u32>, // 0x971A: "TUPD" (LE u32 0x44505554), present in title updates
     pub content_type: u32,         // 0x0344: BE u32 (per iso2god con_header.rs)
     pub media_id: u32,             // 0x0354: BE u32, media ID (0 for DLC)
     pub base_title_id: u32, // 0x0360: BE u32, base game title ID (per iso2god with_execution_info)
     pub display_title: String, // 0x0411: UTF-16BE string (per iso2god with_game_title)
-    pub xex_offset: Option<u64>, // file offset of embedded "XEX2", if any
-    pub region_mask: Option<u32>, // BE u32 at xex_offset + 0x1A0 (TU patch XEX only)
+    pub content_size: u64,  // 0x034C: BE u64
+    pub version: u32,       // 0x0358: BE u32
+    pub base_version: u32,  // 0x035C: BE u32
+    pub save_game_id: u32,  // 0x0368: BE u32
+    pub console_id: String, // 0x036C: 5 bytes hex
+    pub profile_id: String, // 0x0371: 8 bytes hex
+    pub device_id: String,  // 0x03FD: 0x14 bytes hex
+    pub data_file_count: u32, // 0x039D: BE u32
+    pub data_file_combined_size: u64, // 0x03A1: BE u64
+    pub descriptor_type: u32, // 0x03A9: 0 = STFS, 1 = SVOD
+    pub transfer_flags: u8, // 0x1711
+    pub transfer_flag_names: Vec<String>,
+    pub licenses: Vec<StfsLicense>, // 16x16B at 0x022C, non-zero only
+    pub xex_offset: Option<u64>,    // file offset of embedded "XEX2", if any
+    pub region_mask: Option<u32>,   // BE u32 at xex_offset + 0x1A0 (TU patch XEX only)
     pub xex_exec: Option<XexExecInfo>, // ExecutionId from full game XEX (XBLA etc.)
+}
+
+/// Transfer flag names (Free60 STFS doc, byte at 0x1711).
+pub fn transfer_flag_names(flags: u8) -> Vec<String> {
+    const NAMES: [(u8, &str); 6] = [
+        (1 << 2, "DeepLink"),
+        (1 << 3, "NoNetworkStorage"),
+        (1 << 4, "Kinect"),
+        (1 << 5, "MoveOnly"),
+        (1 << 6, "DeviceIdTransfer"),
+        (1 << 7, "ProfileIdTransfer"),
+    ];
+    NAMES
+        .iter()
+        .filter(|(b, _)| flags & b != 0)
+        .map(|(_, n)| n.to_string())
+        .collect()
 }
 
 impl TuHeader {
@@ -52,6 +89,53 @@ impl TuHeader {
 
         reader.seek(SeekFrom::Start(0x0360))?;
         let base_title_id = reader.read_u32::<BigEndian>()?;
+
+        reader.seek(SeekFrom::Start(0x034C))?;
+        let content_size = reader.read_u64::<BigEndian>()?;
+
+        reader.seek(SeekFrom::Start(0x0358))?;
+        let version = reader.read_u32::<BigEndian>()?;
+        let base_version = reader.read_u32::<BigEndian>()?;
+
+        reader.seek(SeekFrom::Start(0x0368))?;
+        let save_game_id = reader.read_u32::<BigEndian>()?;
+
+        let mut hex_at = |off: u64, len: usize| -> Result<String> {
+            reader.seek(SeekFrom::Start(off))?;
+            let mut b = vec![0u8; len];
+            reader.read_exact(&mut b)?;
+            Ok(b.iter().map(|x| format!("{x:02X}")).collect())
+        };
+        let console_id = hex_at(0x036C, 5)?;
+        let profile_id = hex_at(0x0371, 8)?;
+        let device_id = hex_at(0x03FD, 0x14)?;
+
+        reader.seek(SeekFrom::Start(0x039D))?;
+        let data_file_count = reader.read_u32::<BigEndian>()?;
+        let data_file_combined_size = reader.read_u64::<BigEndian>()?;
+        reader.seek(SeekFrom::Start(0x03A9))?;
+        let descriptor_type = reader.read_u32::<BigEndian>()?;
+
+        reader.seek(SeekFrom::Start(0x1711))?;
+        let mut flag = [0u8; 1];
+        reader.read_exact(&mut flag)?;
+        let transfer_flags = flag[0];
+
+        // 16 license slots at 0x022C, each id u64 + bits u32 + flags u32.
+        let mut licenses = Vec::new();
+        reader.seek(SeekFrom::Start(0x022C))?;
+        for _ in 0..16 {
+            let id = reader.read_u64::<BigEndian>()?;
+            let bits = reader.read_u32::<BigEndian>()?;
+            let flags = reader.read_u32::<BigEndian>()?;
+            if id != 0 || bits != 0 || flags != 0 {
+                licenses.push(StfsLicense {
+                    id: format!("{id:016X}"),
+                    bits,
+                    flags,
+                });
+            }
+        }
 
         // Display title: UTF-16BE at 0x0411 (iso2god con_header.rs with_game_title)
         reader.seek(SeekFrom::Start(0x0411))?;
@@ -100,6 +184,19 @@ impl TuHeader {
             media_id,
             base_title_id,
             display_title,
+            content_size,
+            version,
+            base_version,
+            save_game_id,
+            console_id,
+            profile_id,
+            device_id,
+            data_file_count,
+            data_file_combined_size,
+            descriptor_type,
+            transfer_flags,
+            transfer_flag_names: transfer_flag_names(transfer_flags),
+            licenses,
             xex_offset,
             region_mask,
             xex_exec,
