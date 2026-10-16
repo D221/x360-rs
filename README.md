@@ -181,6 +181,8 @@ Region mask bits (as tested by the original checker):
   (`-r` rewrite, `-s` skip, `-c` create, `in!xiso!` tag, `.xbe` media-enable
   patch) by in &lt;in@fishtank.com&gt;, and [xdvdfs](https://github.com/antangelo/xdvdfs)
   (`pack`/`unpack`/`copy-out`/`md5`/`checksum`/`build-image` semantics).
+- XEX rating/region value tables from [Xenia](https://github.com/xenia-project/xenia)
+  (`src/xenia/kernel/util/xex2_info.h`, BSD license).
 - No code was copied from any of these projects; all parsing code here is original.
 
 ## License
