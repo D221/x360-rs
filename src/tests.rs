@@ -1157,6 +1157,16 @@ fn test_gpd_records_decode() {
 }
 
 #[test]
+fn test_gpd_setting_names() {
+    use crate::gpd::setting_name;
+    assert_eq!(setting_name(0x10040003), "Option Controller Vibration");
+    assert_eq!(setting_name(0x63E83FFF), "Title Specific 1");
+    assert_eq!(setting_name(0x8000), "Title Information");
+    assert_eq!(setting_name(0x41040040), "Gamer Name");
+    assert_eq!(setting_name(0xDEADBEEF), "");
+}
+
+#[test]
 fn test_xdbf_gpd_variant_parses() {
     use crate::xdbf::parse_xdbf;
     let dir = std::env::temp_dir().join(format!("tu_gpd_{}", std::process::id()));

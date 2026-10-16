@@ -57,8 +57,53 @@ pub struct GpdTitle {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GpdSetting {
     pub setting_id: String,
+    pub setting_name: String,
     pub data_type: String,
     pub value: String,
+}
+
+/// Human-readable name for a known GPD setting ID
+/// (Free60 `Formats/GPD.md` entry-ID table). Unknown IDs fall back to hex.
+pub fn setting_name(id: u32) -> &'static str {
+    match id {
+        0x8000 => "Title Information",
+        0x8007 => "Avatar Image",
+        0x10040002 => "Gamer Yaxis Inversion",
+        0x10040003 => "Option Controller Vibration",
+        0x10040004 => "Gamercard Zone",
+        0x10040005 => "Gamercard Region",
+        0x10040006 => "Gamercard Cred",
+        0x10040012 => "Option Voice Muted",
+        0x10040013 => "Option Voice Thru Speakers",
+        0x10040014 => "Option Voice Volume",
+        0x10040018 => "Gamercard Titles Played",
+        0x10040019 => "Gamercard Achievements Earned",
+        0x10040021 => "Gamer Difficulty",
+        0x10040024 => "Gamer Control Sensitivity",
+        0x10040029 => "Gamer Preferred Color First",
+        0x10040030 => "Gamer Preferred Color Second",
+        0x10040034 => "Gamer Action Auto Aim",
+        0x10040035 => "Gamer Action Auto Center",
+        0x10040036 => "Gamer Action Movement Control",
+        0x10040038 => "Gamer Race Transmission",
+        0x10040039 => "Gamer Race Camera Location",
+        0x10040040 => "Gamer Race Brake Control",
+        0x10040041 => "Gamer Race Accelerator Control",
+        0x10040056 => "Gamercard Title Cred Earned",
+        0x10040057 => "Gamercard Title Achievements Earned",
+        0x10040063 => "Option Voice Thru Speakers Raw",
+        0x402C0011 => "Gamercard Motto",
+        0x4064000F => "Gamercard Picture Key",
+        0x41040040 => "Gamer Name",
+        0x40520041 => "Gamer Location",
+        0x50040011 => "Gamercard Rep",
+        0x63E80044 => "Avatar Information",
+        0x63E80068 => "Avatar Metadata",
+        0x63E83FFD => "Title Specific 3",
+        0x63E83FFE => "Title Specific 2",
+        0x63E83FFF => "Title Specific 1",
+        _ => "",
+    }
 }
 
 /// One sync-list item: entry ID + sync ID.
@@ -224,8 +269,14 @@ fn decode_setting(setting_id: u32, data: &[u8]) -> Option<GpdSetting> {
         0xFF => ("Null".to_string(), String::new()),
         t => (format!("Unknown({t})"), String::new()),
     };
+    let name = setting_name(setting_id);
     Some(GpdSetting {
         setting_id: format!("{setting_id:08X}"),
+        setting_name: if name.is_empty() {
+            format!("{setting_id:08X}")
+        } else {
+            name.to_string()
+        },
         data_type,
         value,
     })

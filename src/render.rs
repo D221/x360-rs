@@ -484,8 +484,8 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                         }
                         crate::gpd::GpdRecord::Setting(s) => {
                             out.push_str(&format!(
-                                "  Setting {} [{}]: {}\n",
-                                s.setting_id, s.data_type, s.value
+                                "  Setting {} [{}] [{}]: {}\n",
+                                s.setting_name, s.setting_id, s.data_type, s.value
                             ));
                         }
                         crate::gpd::GpdRecord::SyncList(items) => {
