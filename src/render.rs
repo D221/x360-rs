@@ -116,6 +116,21 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 out.push_str(&format!("Device ID: {}\n", info.device_id));
             }
             out.push_str(&format!("Title: {}\n", info.display_title));
+            if !info.publisher_name.is_empty() {
+                out.push_str(&format!("Publisher: {}\n", info.publisher_name));
+            }
+            if !info.game_title_name.is_empty() && info.game_title_name != info.display_title {
+                out.push_str(&format!("Game title: {}\n", info.game_title_name));
+            }
+            if !info.description.is_empty() {
+                out.push_str(&format!("Description: {}\n", info.description));
+            }
+            if !info.locale_descriptions.is_empty() {
+                out.push_str(&format!(
+                    "Also described as: {}\n",
+                    info.locale_descriptions.join(" / ")
+                ));
+            }
             if !info.locale_titles.is_empty() {
                 out.push_str(&format!(
                     "Also known as: {}\n",

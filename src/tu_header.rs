@@ -42,12 +42,16 @@ pub fn sniff_image_format(blob: &[u8]) -> &'static str {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TuHeader {
-    pub magic: u32,                   // 0x0000: "LIVE" (LE u32 0x4556494C)
+    pub magic: u32,                       // 0x0000: "LIVE" (LE u32 0x4556494C)
     pub tu_signature: Option<u32>, // 0x971A: "TUPD" (LE u32 0x44505554), present in title updates
     pub content_type: u32,         // 0x0344: BE u32 (per iso2god con_header.rs)
     pub media_id: u32,             // 0x0354: BE u32, media ID (0 for DLC)
     pub base_title_id: u32, // 0x0360: BE u32, base game title ID (per iso2god with_execution_info)
     pub display_title: String, // 0x0411: UTF-16BE string (per iso2god with_game_title)
+    pub publisher_name: String, // 0x1611: UTF-16BE, 0x80 bytes
+    pub game_title_name: String, // 0x1691: UTF-16BE, 0x80 bytes
+    pub description: String, // first non-empty 0x80 slot at 0x0D11
+    pub locale_descriptions: Vec<String>, // other distinct non-empty slots
     pub content_size: u64,  // 0x034C: BE u64
     pub version: u32,       // 0x0358: BE u32
     pub base_version: u32,  // 0x035C: BE u32
@@ -67,6 +71,20 @@ pub struct TuHeader {
     pub xex_offset: Option<u64>,    // file offset of embedded "XEX2", if any
     pub region_mask: Option<u32>,   // BE u32 at xex_offset + 0x1A0 (TU patch XEX only)
     pub xex_exec: Option<XexExecInfo>, // ExecutionId from full game XEX (XBLA etc.)
+}
+
+/// Read a NUL-terminated UTF-16BE string (up to `max_units` units).
+fn utf16be_string(reader: &mut (impl Read + Seek), off: u64, max_units: usize) -> Result<String> {
+    reader.seek(SeekFrom::Start(off))?;
+    let mut units = Vec::new();
+    for _ in 0..max_units {
+        let c = reader.read_u16::<BigEndian>()?;
+        if c == 0 {
+            break;
+        }
+        units.push(c);
+    }
+    Ok(String::from_utf16_lossy(&units))
 }
 
 /// Transfer flag names (Free60 STFS doc, byte at 0x1711).
@@ -201,6 +219,26 @@ impl TuHeader {
             title_units.push(c);
         }
         let display_title = String::from_utf16_lossy(&title_units);
+        let publisher_name = utf16be_string(&mut reader, 0x1611, 64)?;
+        let game_title_name = utf16be_string(&mut reader, 0x1691, 64)?;
+        // Descriptions: 0x80-byte slots from 0x0D11, first non-empty wins.
+        let mut description = String::new();
+        let mut locale_descriptions = Vec::new();
+        for slot in 0..18 {
+            let off = 0x0D11u64 + slot as u64 * 0x80;
+            if off + 2 > file_size {
+                break;
+            }
+            let s = utf16be_string(&mut reader, off, 64)?;
+            if s.is_empty() || s == display_title {
+                continue;
+            }
+            if description.is_empty() {
+                description = s;
+            } else if !locale_descriptions.contains(&s) {
+                locale_descriptions.push(s);
+            }
+        }
 
         // Additional locale titles: 0x80-byte slots follow the primary
         // title up to 0x411+0x900 (same UTF-16BE encoding).
@@ -263,6 +301,10 @@ impl TuHeader {
             media_id,
             base_title_id,
             display_title,
+            publisher_name,
+            game_title_name,
+            description,
+            locale_descriptions,
             content_size,
             version,
             base_version,
