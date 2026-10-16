@@ -218,7 +218,11 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                     }
                 ));
                 match &x.ratings {
-                    Some(r) => out.push_str(&format!("Game ratings: {r}\n")),
+                    Some(r) => out.push_str(&format!(
+                        "Game ratings: {} ({})\n",
+                        x.rating_labels.join(" "),
+                        r
+                    )),
                     None => out.push_str("Game ratings: not present\n"),
                 }
                 match &x.lan_key {
@@ -226,7 +230,10 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                     None => out.push_str("LAN key: not present\n"),
                 }
                 match x.security_region {
-                    Some(r) => out.push_str(&format!("Security region: {r:08X}\n")),
+                    Some(r) => out.push_str(&format!(
+                        "Security region: {r:08X} ({})\n",
+                        x.region_names.join(" ")
+                    )),
                     None => out.push_str("Security region: not present\n"),
                 }
             }

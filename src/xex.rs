@@ -27,8 +27,10 @@ pub struct XexExtendedInfo {
     pub module_flags: u32,
     pub module_flag_names: Vec<String>,
     pub ratings: Option<String>,
+    pub rating_labels: Vec<String>,
     pub lan_key: Option<String>,
     pub security_region: Option<u32>,
+    pub region_names: Vec<String>,
 }
 
 /// Named module flags (XEX header offset 4).
@@ -50,6 +52,167 @@ pub fn module_flag_names(flags: u32) -> Vec<String> {
         .collect()
 }
 
+/// Rating board order in the `0x40310` entry (Free60 XEX doc), each with its
+/// value table from Xenia's `xex2_info.h`.
+const RATING_BOARDS: [&str; 12] = [
+    "ESRB", "PEGI", "PEGI-FI", "PEGI-PT", "BBFC", "CERO", "USK", "OFLC-AU", "OFLC-NZ", "KMRB",
+    "BRASIL", "FPB",
+];
+
+/// Decode one rating byte into a readable label. Unknown values keep hex
+/// rather than guessing.
+pub fn rating_label(board: usize, value: u8) -> String {
+    let name: Option<&str> = match board {
+        0 => match value {
+            0x00 => Some("eC"),
+            0x02 => Some("E"),
+            0x04 => Some("E10"),
+            0x06 => Some("T"),
+            0x08 => Some("M"),
+            0x0E => Some("AO"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        1 => match value {
+            0 => Some("3+"),
+            4 => Some("7+"),
+            9 => Some("12+"),
+            13 => Some("16+"),
+            14 => Some("18+"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        2 => match value {
+            0 => Some("3+"),
+            4 => Some("7+"),
+            8 => Some("11+"),
+            12 => Some("15+"),
+            14 => Some("18+"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        3 => match value {
+            1 => Some("4+"),
+            3 => Some("6+"),
+            9 => Some("12+"),
+            13 => Some("16+"),
+            14 => Some("18+"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        4 => match value {
+            0 => Some("3+"),
+            1 => Some("U"),
+            5 => Some("PG"),
+            4 => Some("7+"),
+            9 => Some("12+"),
+            12 => Some("15+"),
+            13 => Some("16+"),
+            14 => Some("18+"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        5 => match value {
+            0 => Some("A"),
+            2 => Some("B"),
+            4 => Some("C"),
+            6 => Some("D"),
+            8 => Some("Z"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        6 => match value {
+            0 => Some("All"),
+            2 => Some("6+"),
+            4 => Some("12+"),
+            6 => Some("16+"),
+            8 => Some("18+"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        7 | 8 => match value {
+            0 => Some("G"),
+            2 => Some("PG"),
+            4 => Some("M"),
+            6 => Some("MA15+"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        9 => match value {
+            0 => Some("All"),
+            2 => Some("12+"),
+            4 => Some("15+"),
+            6 => Some("18+"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        10 => match value {
+            0 => Some("All"),
+            2 => Some("12+"),
+            4 => Some("14+"),
+            5 => Some("16+"),
+            8 => Some("18+"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        11 => match value {
+            0 => Some("All"),
+            6 => Some("PG"),
+            7 => Some("10+"),
+            10 => Some("13+"),
+            13 => Some("16+"),
+            14 => Some("18+"),
+            0xFF => Some("Unrated"),
+            _ => None,
+        },
+        _ => None,
+    };
+    match name {
+        Some(n) => format!("{}={n}", RATING_BOARDS.get(board).unwrap_or(&"?")),
+        None => format!("{}={value:02X}?", RATING_BOARDS.get(board).unwrap_or(&"?")),
+    }
+}
+
+/// Decode the 12 rating bytes into `BOARD=label` strings.
+pub fn rating_labels(bytes: &[u8; 12]) -> Vec<String> {
+    bytes
+        .iter()
+        .enumerate()
+        .map(|(i, &b)| rating_label(i, b))
+        .collect()
+}
+
+/// Decode the security-info region mask (Xenia `xex2_region_flags`).
+/// This is a different field from the TU region mask in `regions.rs`.
+pub fn security_region_names(region: u32) -> Vec<String> {
+    if region == 0xFFFF_FFFF {
+        return vec!["Region Free".to_string()];
+    }
+    let mut out = Vec::new();
+    if region & 0x0000_00FF != 0 {
+        out.push("NTSC/U".to_string());
+    }
+    if region & 0x0000_FF00 != 0 {
+        out.push("NTSC/J".to_string());
+        if region & 0x0000_0100 != 0 {
+            out.push("NTSC/J(J)".to_string());
+        }
+        if region & 0x0000_0200 != 0 {
+            out.push("NTSC/J(C)".to_string());
+        }
+    }
+    if region & 0x00FF_0000 != 0 {
+        out.push("PAL".to_string());
+        if region & 0x0001_0000 != 0 {
+            out.push("PAL(AU/NZ)".to_string());
+        }
+    }
+    if region & 0xFF00_0000 != 0 {
+        out.push("Other".to_string());
+    }
+    out
+}
+
 /// Parse extra XEX header fields at `xex_offset` in `buf`: module flags
 /// (u32 at +4), game ratings `0x40310` (12 bytes at entry offset),
 /// LAN key `0x40404` (16 bytes at entry offset), security-info region
@@ -69,7 +232,7 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
     if field_count > 256 {
         return None;
     }
-    let mut ratings = None;
+    let mut rating_bytes: Option<[u8; 12]> = None;
     let mut lan_key = None;
     for i in 0..field_count {
         let base = xex_offset.checked_add(24 + i * 8)?;
@@ -92,13 +255,9 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
             // USK, OFLC-AU, OFLC-NZ, KMRB, BRASIL, FPB.
             0x00040310 => {
                 if let Some(e) = data_at(12) {
-                    ratings = Some(
-                        buf[e..e + 12]
-                            .iter()
-                            .map(|b| format!("{b:02X}"))
-                            .collect::<Vec<_>>()
-                            .join(""),
-                    );
+                    let mut raw = [0u8; 12];
+                    raw.copy_from_slice(&buf[e..e + 12]);
+                    rating_bytes = Some(raw);
                 }
             }
             // 16-byte LAN key.
@@ -122,12 +281,26 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         let b = buf.get(at..at.checked_add(4)?)?;
         Some(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
     });
+    let region_names = security_region
+        .map(security_region_names)
+        .unwrap_or_default();
+    let ratings = rating_bytes.map(|raw| {
+        raw.iter()
+            .map(|b| format!("{b:02X}"))
+            .collect::<Vec<_>>()
+            .join("")
+    });
+    let rating_labels = rating_bytes
+        .map(|raw| self::rating_labels(&raw))
+        .unwrap_or_default();
     Some(XexExtendedInfo {
         module_flags,
         module_flag_names: module_flag_names(module_flags),
         ratings,
+        rating_labels,
         lan_key,
         security_region,
+        region_names,
     })
 }
 

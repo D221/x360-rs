@@ -152,7 +152,12 @@ fn xex_extended_info_parses() {
     buf[28..32].copy_from_slice(&0x100u32.to_be_bytes());
     buf[32..36].copy_from_slice(&0x00040404u32.to_be_bytes());
     buf[36..40].copy_from_slice(&0x120u32.to_be_bytes());
-    for (i, b) in [0x11u8, 0x22, 0x33].iter().enumerate() {
+    // Full rating set: T / 18+ / 18+ / 18+ / 18+ / Z / 18+ / MA15+ / MA15+ /
+    // 18+ / 18+ / 18+.
+    for (i, b) in [0x06u8, 14, 14, 14, 14, 8, 8, 6, 6, 6, 8, 14]
+        .iter()
+        .enumerate()
+    {
         buf[0x100 + i] = *b;
     }
     for i in 0..16 {
@@ -162,9 +167,35 @@ fn xex_extended_info_parses() {
     let info = parse_xex_extended_info(&buf, 0).expect("extended parses");
     assert_eq!(info.module_flags, 0x81);
     assert_eq!(module_flag_names(0x81), vec!["TitleModule", "UserMode"]);
-    assert!(info.ratings.unwrap().starts_with("112233"));
+    assert_eq!(info.ratings.as_deref(), Some("060E0E0E0E0808060606080E"));
+    assert_eq!(
+        info.rating_labels,
+        [
+            "ESRB=T",
+            "PEGI=18+",
+            "PEGI-FI=18+",
+            "PEGI-PT=18+",
+            "BBFC=18+",
+            "CERO=Z",
+            "USK=18+",
+            "OFLC-AU=MA15+",
+            "OFLC-NZ=MA15+",
+            "KMRB=18+",
+            "BRASIL=18+",
+            "FPB=18+",
+        ]
+    );
     assert_eq!(info.lan_key.unwrap().len(), 32);
     assert_eq!(info.security_region, Some(0x00FF00FF));
+    assert_eq!(info.region_names, ["NTSC/U", "PAL", "PAL(AU/NZ)"]);
+    assert_eq!(
+        crate::xex::security_region_names(0x0000_FF00),
+        ["NTSC/J", "NTSC/J(J)", "NTSC/J(C)"]
+    );
+    assert_eq!(
+        crate::xex::security_region_names(0xFFFF_FFFF),
+        vec!["Region Free"]
+    );
     // Missing entries yield None fields, not failure.
     let mut bare = vec![0u8; 0x100];
     bare[0..4].copy_from_slice(b"XEX2");
