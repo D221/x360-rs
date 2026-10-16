@@ -12,6 +12,10 @@ Outputs game title, media ID, base title ID, region mask/regions (TU only), XEX 
 
 No GUI, no dependencies on original tools — everything parsed directly from the container. Accepts all three STFS container magics: `LIVE`, `CON `, `PIRS` (identical layout).
 
+## ⚠️ AI Disclosure
+
+This project was developed with AI assistance (large language models). While the code has been tested against real Xbox 360 files (ISOs, XEX, XBE, GPD, SPA, STFS containers, TUs, XBLAs, DLCs) and the CI gate (fmt, clippy, tests, release build) passes, AI-generated code can contain subtle bugs or security issues. **Please review and verify before using on sensitive data or production systems.** All parsing code is original and written specifically for this project; no code was copied from the referenced projects.
+
 ## Features
 
 - Validates `LIVE` container magic and (for TUs) `TUPD` signature; detects content kind (`Title Update`, `Marketplace Content (DLC)`, `Xbox Live Arcade (XBLA)`, `Avatar Item`, `Theme`, `Games on Demand (GoD)`)
