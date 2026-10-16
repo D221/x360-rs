@@ -140,6 +140,44 @@ fn xex_exec_info_parses() {
 }
 
 #[test]
+fn xex_extended_info_parses() {
+    use crate::xex::{module_flag_names, parse_xex_extended_info};
+    // Synthetic XEX2 header: flags + ratings + LAN key + security region.
+    let mut buf = vec![0u8; 0x500];
+    buf[0..4].copy_from_slice(b"XEX2");
+    buf[4..8].copy_from_slice(&0x81u32.to_be_bytes()); // TitleModule + UserMode
+    buf[0x10..0x14].copy_from_slice(&0x300u32.to_be_bytes()); // secinfo at 0x300
+    buf[20..24].copy_from_slice(&2u32.to_be_bytes());
+    buf[24..28].copy_from_slice(&0x00040310u32.to_be_bytes());
+    buf[28..32].copy_from_slice(&0x100u32.to_be_bytes());
+    buf[32..36].copy_from_slice(&0x00040404u32.to_be_bytes());
+    buf[36..40].copy_from_slice(&0x120u32.to_be_bytes());
+    for (i, b) in [0x11u8, 0x22, 0x33].iter().enumerate() {
+        buf[0x100 + i] = *b;
+    }
+    for i in 0..16 {
+        buf[0x120 + i] = 0xA0 + i as u8;
+    }
+    buf[0x300 + 0x178..0x300 + 0x17C].copy_from_slice(&0x00FF00FFu32.to_be_bytes());
+    let info = parse_xex_extended_info(&buf, 0).expect("extended parses");
+    assert_eq!(info.module_flags, 0x81);
+    assert_eq!(module_flag_names(0x81), vec!["TitleModule", "UserMode"]);
+    assert!(info.ratings.unwrap().starts_with("112233"));
+    assert_eq!(info.lan_key.unwrap().len(), 32);
+    assert_eq!(info.security_region, Some(0x00FF00FF));
+    // Missing entries yield None fields, not failure.
+    let mut bare = vec![0u8; 0x100];
+    bare[0..4].copy_from_slice(b"XEX2");
+    bare[20..24].copy_from_slice(&0u32.to_be_bytes());
+    let bare_info = parse_xex_extended_info(&bare, 0).expect("bare parses");
+    assert!(bare_info.ratings.is_none());
+    assert!(bare_info.lan_key.is_none());
+    assert!(bare_info.security_region.is_none());
+    // Not an XEX at all.
+    assert!(parse_xex_extended_info(&[0u8; 8], 0).is_none());
+}
+
+#[test]
 fn dlc_without_xex_parses() {
     let path = std::env::temp_dir().join(format!("tu_parser_dlc_{}.bin", std::process::id()));
     write_synthetic_dlc(&path);

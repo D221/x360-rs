@@ -13,7 +13,7 @@ use crate::iso::{
 };
 use crate::report::{GameDirInfo, Report, XbeFileInfo, XexFileInfo};
 use crate::tu_parser::TuParser;
-use crate::xex::{parse_xex_exec_info, read_at};
+use crate::xex::{parse_xex_exec_info, parse_xex_extended_info, read_at};
 
 /// Dispatch on magic bytes: STFS (`LIVE`/`CON `/`PIRS`), standalone
 /// `XEX2`/`XBEH` executables, else an XISO probe (GDF magic at the
@@ -42,6 +42,7 @@ pub fn parse_file(path: &PathBuf) -> Result<Report> {
         return Ok(Report::Xex(XexFileInfo {
             file_path: path.display().to_string(),
             file_size,
+            extended: parse_xex_extended_info(&win, 0),
             exec,
         }));
     }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::iso::{IsoInfo, XbeInfo};
 use crate::stfs::VerifyReport;
-use crate::xex::XexExecInfo;
+use crate::xex::{XexExecInfo, XexExtendedInfo};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DirectoryEntry {
@@ -42,6 +42,7 @@ pub struct XexFileInfo {
     pub file_path: String,
     pub file_size: u64,
     pub exec: XexExecInfo,
+    pub extended: Option<XexExtendedInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

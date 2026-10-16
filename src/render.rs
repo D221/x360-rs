@@ -207,6 +207,29 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
             out.push_str(&format!("File size: {}\n", format_size(info.file_size)));
             out.push_str("Format: XEX executable\n");
             out.push_str(&xex_line(&info.exec));
+            if let Some(x) = &info.extended {
+                out.push_str(&format!(
+                    "Module flags: {:08X}{}\n",
+                    x.module_flags,
+                    if x.module_flag_names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", x.module_flag_names.join(", "))
+                    }
+                ));
+                match &x.ratings {
+                    Some(r) => out.push_str(&format!("Game ratings: {r}\n")),
+                    None => out.push_str("Game ratings: not present\n"),
+                }
+                match &x.lan_key {
+                    Some(k) => out.push_str(&format!("LAN key: {k}\n")),
+                    None => out.push_str("LAN key: not present\n"),
+                }
+                match x.security_region {
+                    Some(r) => out.push_str(&format!("Security region: {r:08X}\n")),
+                    None => out.push_str("Security region: not present\n"),
+                }
+            }
             out.push('\n');
         }
         Report::Xbe(info) => {
