@@ -31,7 +31,7 @@ pub fn parse_file(path: &PathBuf) -> Result<Report> {
         let mut parser = TuParser::open(path)?;
         let mut info = parser.parse()?;
         info.file_path = path.display().to_string();
-        return Ok(Report::Stfs(info));
+        return Ok(Report::Stfs(Box::new(info)));
     }
     if &magic == b"XEX2" {
         drop(reader);

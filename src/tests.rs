@@ -165,7 +165,7 @@ fn stfs_header_extended_fields_parse() {
     buf[0x3A9..0x3AD].copy_from_slice(&1u32.to_be_bytes());
     buf[0x3FD..0x411].copy_from_slice(&[0xFFu8; 0x14]);
     buf[0x1711] = 0b00110100; // Kinect + MoveOnly + DeepLink
-    // One license slot: id + bits + flags.
+                              // One license slot: id + bits + flags.
     buf[0x22C..0x234].copy_from_slice(&0x1122334455667788u64.to_be_bytes());
     buf[0x234..0x238].copy_from_slice(&0xFFFFFFFFu32.to_be_bytes());
     buf[0x238..0x23C].copy_from_slice(&0x00000001u32.to_be_bytes());
@@ -240,12 +240,51 @@ fn xex_extended_scalars_parse() {
     assert_eq!(info.entry_point, Some(0x82123456));
     assert_eq!(info.image_base, Some(0x82000000));
     let tls = info.tls.expect("tls parses");
-    assert_eq!((tls.slots, tls.data_size, tls.raw_size), (9, 0x1000, 0x2000));
+    assert_eq!(
+        (tls.slots, tls.data_size, tls.raw_size),
+        (9, 0x1000, 0x2000)
+    );
     assert_eq!(info.static_libs.len(), 1);
     assert_eq!(info.static_libs[0].name, "xboxkrnl");
     assert_eq!(info.static_libs[0].approval, "Approved");
     assert_eq!(info.pe_name.as_deref(), Some("game.exe"));
     assert_eq!(info.headers.len(), 6);
+}
+
+#[test]
+fn stfs_multilevel_addresses_match_xenia_formulas() {
+    use crate::stfs::StfsLayout;
+    // Data blocks: T0@0, data 0..169 @1..170, L1@171, then repeating
+    // 171-block groups; second L1 at 29072, L2 at 29071.
+    assert_eq!(StfsLayout::data_phys_block(0), 1);
+    assert_eq!(StfsLayout::data_phys_block(169), 170);
+    assert_eq!(StfsLayout::data_phys_block(170), 173);
+    assert_eq!(StfsLayout::data_phys_block(171), 174);
+    assert_eq!(StfsLayout::data_phys_block(28899), 29070);
+    assert_eq!(StfsLayout::data_phys_block(28900), 29074);
+    assert_eq!(StfsLayout::data_phys_block(29069), 29243);
+    // Level-0 tables.
+    assert_eq!(StfsLayout::l0_table_phys(0), 0);
+    assert_eq!(StfsLayout::l0_table_phys(1), 172);
+    assert_eq!(StfsLayout::l0_table_phys(169), 28900);
+    assert_eq!(StfsLayout::l0_table_phys(170), 29073);
+    assert_eq!(StfsLayout::l0_table_phys(171), 29244);
+    // Level-1 tables and the level-2 table.
+    assert_eq!(StfsLayout::l1_table_phys(0), 171);
+    assert_eq!(StfsLayout::l1_table_phys(1), 29072);
+    assert_eq!(crate::stfs::STFS_L2_PHYS, 29071);
+    // Table counts.
+    let layout = StfsLayout {
+        base: 0xB000,
+        table_off: 0xC000,
+        table_blocks: 0,
+        alloc_blocks: 90684,
+        top_hash: [0u8; 20],
+        header_sha1: [0u8; 20],
+        file_size: u64::MAX,
+    };
+    assert_eq!(layout.num_l0_tables().unwrap(), 90684u64.div_ceil(170));
+    assert_eq!(layout.num_l1_tables(90684u64.div_ceil(170)), 4);
 }
 
 #[test]
@@ -587,9 +626,28 @@ fn stfs_multilevel_refused() {
     let size = file.metadata().unwrap().len();
     let mut reader = BufReader::new(file);
     let layout = StfsLayout::read(&mut reader, size).expect("layout reads");
+    // 30000 blocks need 177 L0 tables across 2 L1 tables: supported now.
+    assert_eq!(layout.num_l0_tables().unwrap(), 30000u64.div_ceil(170));
+    assert_eq!(layout.num_l1_tables(177), 2);
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn stfs_absurd_size_refused() {
+    // Past 170 level-1 tables (> 4913000 blocks) is still refused.
+    let mut img = vec![0u8; 0xC000];
+    img[0..4].copy_from_slice(b"LIVE");
+    img[0x340..0x344].copy_from_slice(&0xAD0Eu32.to_be_bytes());
+    img[0x379] = 0x24;
+    img[0x395..0x399].copy_from_slice(&5000000u32.to_be_bytes());
+    let path = std::env::temp_dir().join(format!("tu_parser_huge_{}.bin", std::process::id()));
+    std::fs::write(&path, &img).unwrap();
+    let file = File::open(&path).unwrap();
+    let size = file.metadata().unwrap().len();
+    let mut reader = BufReader::new(file);
+    let layout = StfsLayout::read(&mut reader, size).expect("layout reads");
     assert!(layout.num_l0_tables().is_err());
-    assert!(verify_stfs(&mut reader, size).is_err());
-    std::fs::remove_file(&path).ok();
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]

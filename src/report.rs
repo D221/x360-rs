@@ -104,7 +104,7 @@ pub struct GameDirInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum Report {
-    Stfs(TuInfo),
+    Stfs(Box<TuInfo>),
     Xiso(IsoInfo),
     Xex(XexFileInfo),
     Xbe(XbeFileInfo),

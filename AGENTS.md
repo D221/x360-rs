@@ -85,7 +85,7 @@ Design docs (not in this dir): `../docs/superpowers/specs/` + `../docs/superpowe
 - Auto-detects format by magic bytes: LIVE/CON /PIRS (STFS), XEX2, XBEH, else probes for XISO (MICROSOFT*XBOX*MEDIA at sector 0x20)
 - STFS file table: 64-byte entries at 0xC000, densely packed, stops at first all-zero slot
 - Region mask at XEX2 + 0x1A0 (BE u32), decoded using bit tests matching original Title Update Checker
-- Hash verification (--verify): header SHA1, top hash, level-0 table hashes, every used data block hash
+- Hash verification (--verify): header SHA1, top hash (T0 / L1 / L2 by package size), every table and used data block hash across all three hash levels
 - Extraction: STFS (--extract) and XISO (--extract-iso) both create subfolder named by Title ID (XISO) or Base Title ID (STFS)
 - XISO extraction auto-selects fastest method: parallel on Windows for >2GB, mmap otherwise
 - JSON output: tagged unions with type: stfs | xiso | xex | xbe | gamedir

@@ -19,11 +19,13 @@ use crate::xex::read_at;
 // Verified empirically against 23 TU/DLC plus XBLA/avatar/theme samples
 // (free60 STFS wiki for field semantics):
 // - block size 0x1000; block-space base = ((HeaderSize@0x340 + 0xFFF) & 0xF000)
-// - physical block 0 = level-0 hash table T0; data block N lives at
-//   physical block N + 1 + (N / 170) + (1 if N >= 170 else 0), i.e. one
-//   hash-table block every 170 data blocks plus the single level-1 table
-//   at physical block 171 (hashes of the L0 tables; header top hash @0x381
-//   is its SHA1).
+// - hash hierarchy (Xenia `BlockToOffset`/`BlockToHashBlockNumber` with one
+//   hash block per table, matching all verified samples):
+//   Level 0: table of the next 170 data blocks (span 170)
+//   Level 1: table of the next 170 level-0 tables (span 28900)
+//   Level 2: table of level-1 tables (single block at physical 29071)
+//   Physical block = data block + one hash block per spanned level, i.e.
+//   data block 171 sits where block 172 would (block 172 holds a table).
 // - file table (LE24 block number @0x37E, LE16 count @0x37C) holds 64-byte
 //   entries: name[0x28], flags+namelen @0x28 (0x80 = dir, 0x40 =
 //   consecutive, low 6 bits = name length), allocated LE24 @0x29,
@@ -31,13 +33,19 @@ use crate::xex::read_at;
 //   size BE u32 @0x34.
 // - hash record (24 bytes): SHA1(20) + status(1, 0x80 = used) + next BE24
 //   (0xFFFFFF = end of chain).
-// Files whose tables exceed one level-1 table (> 28900 data blocks) use an
-// unmapped multi-level layout and are refused with a clear error.
+// - header top hash covers T0 alone (single table), the L1 table at
+//   physical 171 (up to 170 L0 tables), or the L2 table at physical 29071.
+// - packages beyond 170 level-1 tables (> 4913000 data blocks, ~20 GiB)
+//   are refused with a clear error.
 
 pub const STFS_BLOCK: u64 = 0x1000;
 pub const STFS_HASH_SPAN: u64 = 170;
-#[allow(dead_code)]
-pub const STFS_MAX_SINGLE_L1_BLOCKS: u64 = 170 * 170; // 28900
+pub const STFS_L1_SPAN: u64 = 170 * 170; // 28900 data blocks per L1 table
+pub const STFS_L2_SPAN: u64 = 170 * 170 * 170; // 4913000 data blocks
+/// Physical block of the first level-1 table.
+pub const STFS_L1_PHYS: u64 = 171;
+/// Physical block of the level-2 (top) table.
+pub const STFS_L2_PHYS: u64 = 29071;
 
 #[derive(Debug, Clone)]
 pub struct StfsLayout {
@@ -58,7 +66,7 @@ pub enum StfsError {
     #[error("SVOD data layout not supported (only STFS containers can be verified/extracted)")]
     SvodLayout,
     #[error(
-        "multi-level hash tables beyond one level-1 table are not supported ({0} data blocks)"
+        "multi-level hash tables beyond 170 level-1 tables are not supported ({0} data blocks)"
     )]
     MultiLevel(u64),
     #[error("table region out of range")]
@@ -117,28 +125,59 @@ impl StfsLayout {
         })
     }
 
-    /// Number of level-0 hash tables needed; errors when more than one
-    /// level-1 table would be required.
+    /// Number of level-0 hash tables needed; errors past 170 level-1
+    /// tables (> 4913000 data blocks, ~20 GiB).
     pub fn num_l0_tables(&self) -> Result<u64> {
         let n = self.alloc_blocks.div_ceil(STFS_HASH_SPAN);
-        if n > STFS_HASH_SPAN {
+        if n > STFS_HASH_SPAN * STFS_HASH_SPAN {
             return Err(StfsError::MultiLevel(self.alloc_blocks).into());
         }
         Ok(n.max(1))
     }
 
-    /// Physical block number holding level-0 table `i`.
-    pub fn l0_table_phys(i: u64) -> u64 {
-        if i == 0 {
-            0
-        } else {
-            172 + (i - 1) * 171
-        }
+    /// Number of level-1 hash tables needed (0 or 1 when a single L0/L1
+    /// covers everything).
+    pub fn num_l1_tables(&self, num_l0: u64) -> u64 {
+        num_l0.div_ceil(STFS_HASH_SPAN)
     }
 
-    /// Physical block number holding data block `b`.
+    /// Physical block number holding level-0 table `i` (covers data blocks
+    /// `170*i .. 170*i+170`). General form of Xenia's
+    /// `BlockToHashBlockNumber(block, 0)` with one hash block per table.
+    pub fn l0_table_phys(i: u64) -> u64 {
+        let b = i * STFS_HASH_SPAN;
+        if b < STFS_HASH_SPAN {
+            return 0;
+        }
+        let mut block = (b / STFS_HASH_SPAN) * (STFS_HASH_SPAN + 1);
+        block += (b / STFS_L1_SPAN) + 1;
+        if b < STFS_L1_SPAN {
+            return block;
+        }
+        block + 1
+    }
+
+    /// Physical block number holding level-1 table `j` (covers L0 tables
+    /// `170*j .. 170*j+170`). General form of Xenia's
+    /// `BlockToHashBlockNumber(block, 1)` with one hash block per table.
+    pub fn l1_table_phys(j: u64) -> u64 {
+        if j == 0 {
+            return STFS_L1_PHYS;
+        }
+        j * (STFS_L1_SPAN + STFS_HASH_SPAN + 1) + 1
+    }
+
+    /// Physical block number holding data block `b`. General form of
+    /// Xenia's `BlockToOffset`: one hash-table block per spanned level.
     pub fn data_phys_block(b: u64) -> u64 {
-        b + 1 + b / STFS_HASH_SPAN + u64::from(b >= STFS_HASH_SPAN)
+        let mut block = b;
+        for &span in &[STFS_HASH_SPAN, STFS_L1_SPAN, STFS_L2_SPAN] {
+            block += (b + span) / span;
+            if b < span {
+                break;
+            }
+        }
+        block
     }
 
     pub fn phys_offset(&self, phys: u64) -> Result<u64> {
@@ -212,9 +251,10 @@ pub fn verify_stfs(reader: &mut (impl Read + Seek), file_size: u64) -> Result<Ve
         errors.push("header SHA1 mismatch".to_string());
     }
 
-    // 2. Top hash: SHA1 of the level-1 table, or of T0 itself when a
-    // single level-0 table covers everything (tiny files have no L1).
+    // 2. Top hash: SHA1 of T0 alone (single table), of the level-1
+    // table (up to 170 L0 tables), or of the level-2 table (beyond).
     let num_l0 = layout.num_l0_tables()?;
+    let num_l1 = layout.num_l1_tables(num_l0);
     let top_hash_ok = if num_l0 == 1 {
         let t0 = layout.read_block(reader, 0)?;
         tables_checked += 1;
@@ -223,8 +263,8 @@ pub fn verify_stfs(reader: &mut (impl Read + Seek), file_size: u64) -> Result<Ve
             errors.push("top hash mismatch (level-0 table)".to_string());
         }
         ok
-    } else {
-        let l1 = layout.read_block(reader, 171)?;
+    } else if num_l1 == 1 {
+        let l1 = layout.read_block(reader, StfsLayout::l1_table_phys(0))?;
         tables_checked += 1;
         let ok = sha1_of(&l1) == layout.top_hash;
         if !ok {
@@ -238,6 +278,42 @@ pub fn verify_stfs(reader: &mut (impl Read + Seek), file_size: u64) -> Result<Ve
                 tables_checked += 1;
                 if sha1_of(&t) != l1[i as usize * 24..i as usize * 24 + 20] {
                     errors.push(format!("level-0 table {i} hash mismatch"));
+                }
+            }
+        }
+        ok
+    } else {
+        let l2 = layout.read_block(reader, STFS_L2_PHYS)?;
+        tables_checked += 1;
+        let mut ok = sha1_of(&l2) == layout.top_hash;
+        if !ok {
+            errors.push("top hash mismatch (level-2 table)".to_string());
+        }
+
+        // 3. Each level-1 table hash must match the level-2 record, and
+        // each level-0 table hash its level-1 record.
+        if ok {
+            for j in 0..num_l1 {
+                let l1 = layout.read_block(reader, StfsLayout::l1_table_phys(j))?;
+                tables_checked += 1;
+                if sha1_of(&l1) != l2[j as usize * 24..j as usize * 24 + 20] {
+                    errors.push(format!("level-1 table {j} hash mismatch"));
+                    ok = false;
+                    continue;
+                }
+                for k in 0..STFS_HASH_SPAN {
+                    let i = j * STFS_HASH_SPAN + k;
+                    if i >= num_l0 {
+                        break;
+                    }
+                    let t = layout.read_block(reader, StfsLayout::l0_table_phys(i))?;
+                    tables_checked += 1;
+                    // Slot within this L1 table: L0 tables are densely
+                    // packed, so global index maps directly.
+                    let slot = (i % STFS_HASH_SPAN) as usize * 24;
+                    if sha1_of(&t) != l1[slot..slot + 20] {
+                        errors.push(format!("level-0 table {i} hash mismatch"));
+                    }
                 }
             }
         }
@@ -457,7 +533,7 @@ pub(crate) fn extract_report(
     title_id: Option<&str>,
 ) -> Result<u64> {
     let layout = StfsLayout::read(reader, file_size)?;
-    // Refuse multi-level layouts before writing anything.
+    // Refuse absurd sizes (> 170 level-1 tables) before writing anything.
     layout.num_l0_tables()?;
 
     // Create subfolder with title_id if provided
