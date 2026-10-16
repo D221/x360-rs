@@ -63,6 +63,7 @@ pub struct TuHeader {
     pub transfer_flag_names: Vec<String>,
     pub licenses: Vec<StfsLicense>, // 16x16B at 0x022C, non-zero only
     pub thumbnails: Vec<StfsThumbnail>, // dashboard images at 0x171A/0x571A
+    pub locale_titles: Vec<String>, // extra display locales at 0x411+slot*0x80
     pub xex_offset: Option<u64>,    // file offset of embedded "XEX2", if any
     pub region_mask: Option<u32>,   // BE u32 at xex_offset + 0x1A0 (TU patch XEX only)
     pub xex_exec: Option<XexExecInfo>, // ExecutionId from full game XEX (XBLA etc.)
@@ -187,7 +188,9 @@ impl TuHeader {
             }
         }
 
-        // Display title: UTF-16BE at 0x0411 (iso2god con_header.rs with_game_title)
+        // Display title: UTF-16BE at 0x0411 (iso2god con_header.rs with_game_title).
+        // The Free60 doc says UTF-8, but real files store UTF-16BE (zeros at
+        // even positions) — verified on retail samples, so BE decoding stays.
         reader.seek(SeekFrom::Start(0x0411))?;
         let mut title_units = Vec::new();
         for _ in 0..128 {
@@ -198,6 +201,32 @@ impl TuHeader {
             title_units.push(c);
         }
         let display_title = String::from_utf16_lossy(&title_units);
+
+        // Additional locale titles: 0x80-byte slots follow the primary
+        // title up to 0x411+0x900 (same UTF-16BE encoding).
+        let mut locale_titles = Vec::new();
+        for slot in 1..18 {
+            let off = 0x0411u64 + slot as u64 * 0x80;
+            if off + 2 > file_size {
+                break;
+            }
+            reader.seek(SeekFrom::Start(off))?;
+            let mut units = Vec::new();
+            for _ in 0..64 {
+                let c = match reader.read_u16::<BigEndian>() {
+                    Ok(c) => c,
+                    Err(_) => break,
+                };
+                if c == 0 {
+                    break;
+                }
+                units.push(c);
+            }
+            let s = String::from_utf16_lossy(&units);
+            if !s.is_empty() && s != display_title && !locale_titles.contains(&s) {
+                locale_titles.push(s);
+            }
+        }
 
         // Locate embedded XEX2 with a chunked streaming search (never load
         // the whole file: TUs can be hundreds of MB). Only TU *patch* XEXs
@@ -249,6 +278,7 @@ impl TuHeader {
             transfer_flag_names: transfer_flag_names(transfer_flags),
             licenses,
             thumbnails,
+            locale_titles,
             xex_offset,
             region_mask,
             xex_exec,

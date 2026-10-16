@@ -42,6 +42,7 @@ pub struct TuInfo {
     pub metadata_version: u32,
     pub transfer_flags: String,
     pub licenses: Vec<String>,
+    pub locale_titles: Vec<String>,
     pub thumbnails: Vec<crate::tu_header::StfsThumbnail>,
     pub display_title: String,
     pub region_mask: Option<String>,

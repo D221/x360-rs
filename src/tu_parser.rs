@@ -95,6 +95,7 @@ impl TuParser {
                 .iter()
                 .map(|l| format!("{} bits={:08X} flags={:08X}", l.id, l.bits, l.flags))
                 .collect(),
+            locale_titles: header.locale_titles,
             thumbnails: header.thumbnails,
             display_title: header.display_title,
             region_mask: header.region_mask.map(|m| format!("{:08X}", m)),

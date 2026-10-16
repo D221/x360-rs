@@ -112,6 +112,12 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 out.push_str(&format!("Device ID: {}\n", info.device_id));
             }
             out.push_str(&format!("Title: {}\n", info.display_title));
+            if !info.locale_titles.is_empty() {
+                out.push_str(&format!(
+                    "Also known as: {}\n",
+                    info.locale_titles.join(" / ")
+                ));
+            }
             out.push_str(&format!(
                 "Region mask: {}\n",
                 info.region_mask.as_deref().unwrap_or("n/a")
