@@ -46,16 +46,13 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
             out.push_str(&format!("=== {} ===\n", info.file_path));
             out.push_str(&format!("File size: {}\n", format_size(info.file_size)));
             out.push_str(&format!("Container: {}\n", info.container_magic));
-            out.push_str(&format!(
-                "LIVE container: {}\n",
-                if info.is_live { "YES" } else { "NO" }
-            ));
-            out.push_str(&format!(
-                "Title Update: {}\n",
-                if info.is_title_update { "YES" } else { "NO" }
-            ));
+            if info.is_title_update {
+                out.push_str("Title Update: YES\n");
+            }
             out.push_str(&format!("Kind: {}\n", info.content_kind));
-            out.push_str(&format!("Media ID: {}\n", info.media_id));
+            if info.media_id.chars().any(|c| c != '0') {
+                out.push_str(&format!("Media ID: {}\n", info.media_id));
+            }
             out.push_str(&format!(
                 "Base title ID: {} ({})\n",
                 info.base_title_id, info.title_class
@@ -69,18 +66,25 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 "Content size: {}\n",
                 format_size(info.content_size)
             ));
-            out.push_str(&format!(
-                "Version: {} (base {})\n",
-                info.version, info.base_version
-            ));
+            if info.version.chars().any(|c| c != '0') || info.base_version.chars().any(|c| c != '0')
+            {
+                out.push_str(&format!(
+                    "Version: {} (base {})\n",
+                    info.version, info.base_version
+                ));
+            }
             out.push_str(&format!("Descriptor: {}\n", info.descriptor_type));
             out.push_str(&format!("Metadata version: {}\n", info.metadata_version));
-            out.push_str(&format!(
-                "Data files: {} ({})\n",
-                info.data_file_count,
-                format_size(info.data_file_combined_size)
-            ));
-            out.push_str(&format!("Transfer flags: {}\n", info.transfer_flags));
+            if info.data_file_count > 0 {
+                out.push_str(&format!(
+                    "Data files: {} ({})\n",
+                    info.data_file_count,
+                    format_size(info.data_file_combined_size)
+                ));
+            }
+            if info.transfer_flags != "00" {
+                out.push_str(&format!("Transfer flags: {}\n", info.transfer_flags));
+            }
             if !info.licenses.is_empty() {
                 out.push_str(&format!("Licenses ({}):\n", info.licenses.len()));
                 for l in info.licenses.iter().take(16) {
@@ -118,18 +122,12 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                     info.locale_titles.join(" / ")
                 ));
             }
-            out.push_str(&format!(
-                "Region mask: {}\n",
-                info.region_mask.as_deref().unwrap_or("n/a")
-            ));
-            out.push_str(&format!(
-                "Regions: {}\n",
-                if info.regions.is_empty() {
-                    "n/a".to_string()
-                } else {
-                    info.regions.join(" ")
-                }
-            ));
+            if let Some(mask) = info.region_mask.as_deref() {
+                out.push_str(&format!("Region mask: {mask}\n"));
+            }
+            if !info.regions.is_empty() {
+                out.push_str(&format!("Regions: {}\n", info.regions.join(" ")));
+            }
             if !info.regions_detailed.is_empty() {
                 out.push_str(&format!(
                     "Regions (detailed): {}\n",
