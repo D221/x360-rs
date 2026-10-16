@@ -72,10 +72,9 @@ goto MENU
 pause
 goto MENU
 
-:: Helper: strip surrounding quotes from %1
+:: Helper: strip surrounding quotes from a variable using for /f
 :strip_quotes
-set "%1=%%1"
-set "%1=%%1:"
+for /f "delims=" %%F in ("%~1") do set "%~1=%%F"
 goto :eof
 
 :PARSE_FILE
@@ -83,7 +82,7 @@ cls
 echo --- Parse a single file ---
 set /p FILE="Enter file path: "
 if "%FILE%"=="" goto PAUSE_AND_MENU
-set "FILE=%FILE:"=%"
+call :strip_quotes FILE
 "%EXE%" "%FILE%"
 pause
 goto MENU
@@ -93,7 +92,7 @@ cls
 echo --- Parse directory recursively ---
 set /p DIR="Enter directory path: "
 if "%DIR%"=="" goto PAUSE_AND_MENU
-set "DIR=%DIR:"=%"
+call :strip_quotes DIR
 "%EXE%" --dir "%DIR%" --recursive
 pause
 goto MENU
@@ -103,7 +102,7 @@ cls
 echo --- Verify STFS hash chain ---
 set /p FILE="Enter STFS file path: "
 if "%FILE%"=="" goto PAUSE_AND_MENU
-set "FILE=%FILE:"=%"
+call :strip_quotes FILE
 "%EXE%" "%FILE%" --verify
 pause
 goto MENU
@@ -113,10 +112,10 @@ cls
 echo --- Extract STFS contents ---
 set /p FILE="Enter STFS file path: "
 if "%FILE%"=="" goto PAUSE_AND_MENU
-set "FILE=%FILE:"=%"
+call :strip_quotes FILE
 set /p OUT="Enter output directory: "
 if "%OUT%"=="" goto PAUSE_AND_MENU
-set "OUT=%OUT:"=%"
+call :strip_quotes OUT
 "%EXE%" "%FILE%" --extract "%OUT%"
 pause
 goto MENU
@@ -126,10 +125,10 @@ cls
 echo --- Extract STFS thumbnails ---
 set /p FILE="Enter STFS file path: "
 if "%FILE%"=="" goto PAUSE_AND_MENU
-set "FILE=%FILE:"=%"
+call :strip_quotes FILE
 set /p OUT="Enter output directory: "
 if "%OUT%"=="" goto PAUSE_AND_MENU
-set "OUT=%OUT:"=%"
+call :strip_quotes OUT
 "%EXE%" "%FILE%" --extract-thumbnail "%OUT%"
 pause
 goto MENU
@@ -139,10 +138,10 @@ cls
 echo --- Extract XISO/GDF contents ---
 set /p FILE="Enter XISO file path: "
 if "%FILE%"=="" goto PAUSE_AND_MENU
-set "FILE=%FILE:"=%"
+call :strip_quotes FILE
 set /p OUT="Enter output directory: "
 if "%OUT%"=="" goto PAUSE_AND_MENU
-set "OUT=%OUT:"=%"
+call :strip_quotes OUT
 "%EXE%" "%FILE%" --extract-iso "%OUT%"
 pause
 goto MENU
@@ -152,12 +151,12 @@ cls
 echo --- Optimize XISO ---
 set /p FILE="Enter XISO file path: "
 if "%FILE%"=="" goto PAUSE_AND_MENU
-set "FILE=%FILE:"=%"
+call :strip_quotes FILE
 set /p OUT="Enter output file (or leave blank for in-place): "
 if "%OUT%"=="" (
     "%EXE%" "%FILE%" --optimize --in-place --verify-output
 ) else (
-    set "OUT=%OUT:"=%"
+    call :strip_quotes OUT
     "%EXE%" "%FILE%" --optimize -o "%OUT%" --verify-output
 )
 pause
@@ -168,10 +167,10 @@ cls
 echo --- Truncate XISO trailing sectors ---
 set /p FILE="Enter XISO file path: "
 if "%FILE%"=="" goto PAUSE_AND_MENU
-set "FILE=%FILE:"=%"
+call :strip_quotes FILE
 set /p OUT="Enter output file: "
 if "%OUT%"=="" goto PAUSE_AND_MENU
-set "OUT=%OUT:"=%"
+call :strip_quotes OUT
 "%EXE%" "%FILE%" --truncate -o "%OUT%"
 pause
 goto MENU
@@ -181,7 +180,7 @@ cls
 echo --- MD5 checksums for XISO entries ---
 set /p FILE="Enter XISO file path: "
 if "%FILE%"=="" goto PAUSE_AND_MENU
-set "FILE=%FILE:"=%"
+call :strip_quotes FILE
 "%EXE%" "%FILE%" --md5
 pause
 goto MENU
@@ -191,7 +190,7 @@ cls
 echo --- Deterministic content checksum ---
 set /p FILE="Enter XISO file path: "
 if "%FILE%"=="" goto PAUSE_AND_MENU
-set "FILE=%FILE:"=%"
+call :strip_quotes FILE
 "%EXE%" "%FILE%" --checksum
 pause
 goto MENU
@@ -201,7 +200,7 @@ cls
 echo --- Show raw strings in a file ---
 set /p FILE="Enter file path: "
 if "%FILE%"=="" goto PAUSE_AND_MENU
-set "FILE=%FILE:"=%"
+call :strip_quotes FILE
 "%EXE%" "%FILE%" --show-strings
 pause
 goto MENU
