@@ -3,6 +3,7 @@
 mod cli;
 mod constants;
 mod extract;
+mod gpd;
 mod iso;
 mod parse;
 mod regions;

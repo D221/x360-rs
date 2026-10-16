@@ -369,6 +369,58 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 .map(|e| (e.resource.as_str(), e.offset, e.size, false))
                 .collect();
             render_entries(&mut out, &rows, show_entries);
+            if !info.records.is_empty() {
+                out.push_str(&format!("\nDecoded records ({}):\n", info.records.len()));
+                for r in &info.records {
+                    match r {
+                        crate::gpd::GpdRecord::Achievement(a) => {
+                            out.push_str(&format!(
+                                "  Achievement #{}: {} ({}G{}{}{})\n    {}\n",
+                                a.achievement_id,
+                                a.name,
+                                a.gamerscore,
+                                if a.earned { ", earned" } else { "" },
+                                if a.secret { ", secret" } else { "" },
+                                if a.online { ", online" } else { "" },
+                                if a.unlocked_desc.is_empty() {
+                                    a.locked_desc.clone()
+                                } else {
+                                    a.unlocked_desc.clone()
+                                },
+                            ));
+                        }
+                        crate::gpd::GpdRecord::Title(t) => {
+                            out.push_str(&format!(
+                                "  Title {}: {} ({}/{} achievements, {}/{}G{})\n",
+                                t.title_id,
+                                t.title_name,
+                                t.unlocked,
+                                t.achievements,
+                                t.gamerscore_unlocked,
+                                t.gamerscore_total,
+                                t.last_played
+                                    .as_ref()
+                                    .map(|d| format!(", last played {d}"))
+                                    .unwrap_or_default(),
+                            ));
+                        }
+                        crate::gpd::GpdRecord::Setting(s) => {
+                            out.push_str(&format!(
+                                "  Setting {} [{}]: {}\n",
+                                s.setting_id, s.data_type, s.value
+                            ));
+                        }
+                        crate::gpd::GpdRecord::SyncList(items) => {
+                            out.push_str(&format!("  Sync list: {} items\n", items.len()));
+                        }
+                        crate::gpd::GpdRecord::SyncData { next, last, time } => {
+                            out.push_str(&format!(
+                                "  Sync data: next={next:016X} last={last:016X} {time}\n"
+                            ));
+                        }
+                    }
+                }
+            }
             out.push('\n');
         }
         Report::GameDir(info) => {

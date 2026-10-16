@@ -65,7 +65,11 @@ pub fn parse_file(path: &PathBuf) -> Result<Report> {
     // XDBF has no fixed magic: structural probe last (strict validation).
     drop(reader);
     if let Ok(xdbf) = crate::xdbf::parse_xdbf(path, file_size) {
-        return Ok(Report::Xdbf(crate::xdbf::report_info(&xdbf)));
+        let mut rep = crate::xdbf::report_info(&xdbf);
+        if xdbf.variant == "gpd" {
+            rep.records = crate::gpd::decode_gpd_records(&xdbf).unwrap_or_default();
+        }
+        return Ok(Report::Xdbf(rep));
     }
     Err(TuError::UnknownFormat.into())
 }

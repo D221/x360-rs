@@ -6,7 +6,7 @@
 - STFS containers: Title Updates (TU), DLC/Marketplace, XBLA, Avatar, Theme, Indie, GoD
 - XISO/GDF images: XSF, XGD2, XGD1, XGD3 (raw and iso2god-optimized)
 - Standalone executables: XEX (ExecutionId), XBE (original Xbox)
-- XDBF title databases (XEX-embedded and GPD/SPA variants, `src/xdbf.rs`; no validated magic - structural probe only, version `0x10000` with small equal counts falls back from XEX to GPD)
+- XDBF title databases (XEX-embedded and GPD/SPA variants, `src/xdbf.rs`; GPD record decoders in `src/gpd.rs`: achievements, titles, settings, sync; no validated magic - structural probe only, version `0x10000` with small equal counts falls back from XEX to GPD)
 - Extracted game directories
 
 Outputs: game title, media ID, base title ID, region mask/regions (TU only), XEX execution info, file listings with sizes.

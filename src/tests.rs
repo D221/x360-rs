@@ -997,6 +997,88 @@ fn test_mapped_dry_run_writes_nothing() {
 }
 
 #[test]
+fn test_gpd_records_decode() {
+    use crate::gpd::{decode_gpd_records, GpdRecord};
+    use crate::xdbf::parse_xdbf;
+    let dir = std::env::temp_dir().join(format!("tu_gpdrec_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    fn utf16be(s: &str) -> Vec<u8> {
+        let mut v = Vec::new();
+        for c in s.encode_utf16() {
+            v.extend_from_slice(&c.to_be_bytes());
+        }
+        v.push(0);
+        v.push(0);
+        v
+    }
+    // Achievement payload: size + id + image + gamerscore + flags + time + strings.
+    let mut ach = Vec::new();
+    ach.extend_from_slice(&0x1Cu32.to_be_bytes());
+    ach.extend_from_slice(&7u32.to_be_bytes());
+    ach.extend_from_slice(&42u32.to_be_bytes());
+    ach.extend_from_slice(&50i32.to_be_bytes());
+    ach.extend_from_slice(&0x20009u32.to_be_bytes()); // Unlock + earned + shown
+    ach.extend_from_slice(&132000000000000000u64.to_be_bytes()); // 2019-04-17
+    ach.extend_from_slice(&utf16be("First Blood"));
+    ach.extend_from_slice(&utf16be("Drew first blood"));
+    ach.extend_from_slice(&utf16be("???"));
+    // Setting payload: id 0x10040003, Int32 1.
+    let mut setting = vec![0u8; 16];
+    setting[8] = 1;
+    setting.extend_from_slice(&1u32.to_be_bytes());
+    let mut blob = Vec::new();
+    blob.extend_from_slice(b"XDBF");
+    blob.extend_from_slice(&0x10000u32.to_be_bytes());
+    blob.extend_from_slice(&512u32.to_be_bytes());
+    blob.extend_from_slice(&2u32.to_be_bytes());
+    blob.extend_from_slice(&1u32.to_be_bytes());
+    blob.extend_from_slice(&0u32.to_be_bytes());
+    blob.extend_from_slice(&1u16.to_be_bytes());
+    blob.extend_from_slice(&0x100000001u64.to_be_bytes());
+    blob.extend_from_slice(&0u32.to_be_bytes());
+    blob.extend_from_slice(&(ach.len() as u32).to_be_bytes());
+    blob.extend_from_slice(&3u16.to_be_bytes());
+    blob.extend_from_slice(&0x10040003u64.to_be_bytes());
+    blob.extend_from_slice(&(ach.len() as u32).to_be_bytes());
+    blob.extend_from_slice(&(setting.len() as u32).to_be_bytes());
+    while blob.len() < 24 + 512 * 18 + 8 {
+        blob.push(0);
+    }
+    blob.extend_from_slice(&ach);
+    blob.extend_from_slice(&setting);
+    let path = dir.join("t.gpd");
+    std::fs::write(&path, &blob).unwrap();
+    let info = parse_xdbf(&path, blob.len() as u64).expect("parses");
+    assert_eq!(info.variant, "gpd");
+    let mut info = info;
+    info.file_path = path.display().to_string();
+    let records = decode_gpd_records(&info).expect("decodes");
+    assert_eq!(records.len(), 2);
+    match &records[0] {
+        GpdRecord::Achievement(a) => {
+            assert_eq!(a.achievement_id, 7);
+            assert_eq!(a.gamerscore, 50);
+            assert_eq!(a.kind, "Completion");
+            assert!(a.earned);
+            assert!(!a.secret);
+            assert_eq!(a.name, "First Blood");
+            assert_eq!(a.unlocked, Some("2019-04-17 18:40:00".to_string()));
+        }
+        r => panic!("expected achievement, got {r:?}"),
+    }
+    match &records[1] {
+        GpdRecord::Setting(s) => {
+            assert_eq!(s.setting_id, "10040003");
+            assert_eq!(s.data_type, "Int32");
+            assert_eq!(s.value, "1");
+        }
+        r => panic!("expected setting, got {r:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_xdbf_gpd_variant_parses() {
     use crate::xdbf::parse_xdbf;
     let dir = std::env::temp_dir().join(format!("tu_gpd_{}", std::process::id()));
