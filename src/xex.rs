@@ -49,6 +49,8 @@ pub struct XexExtendedInfo {
     pub fs_cache_size: Option<u32>,
     pub system_flags: Option<u32>,
     pub system_flag_names: Vec<String>,
+    pub system_flags2: Option<u32>, // IMAGEKEY_SYSTEM_FLAGS2 (0x00030100)
+    pub system_flag2_names: Vec<String>,
     pub tls: Option<XexTlsInfo>,
     pub static_libs: Vec<XexStaticLib>,
     pub pe_name: Option<String>,
@@ -59,6 +61,21 @@ pub struct XexExtendedInfo {
     pub xgd2_media_id: Option<String>,
     pub load_address: Option<u32>,
     pub page_descriptors: Vec<XexPageDescriptor>,
+    /// Additional optional-header / security-info fields (XexTool
+    /// `src/XexImageEntryTypes.h`, verified layouts).
+    pub savegame_id: Option<String>, // ExecutionId.saveGameId
+    pub bounding_path: Option<String>,         // 0x000080FF
+    pub bounding_device_id: Option<String>,    // 0x00008105 (20 bytes)
+    pub restrict_console_ids: Vec<String>,     // 0x000042FF (5-byte IDs)
+    pub restrict_kv_privs: Option<(u64, u64)>, // 0x00004004 (mask, val)
+    pub restrict_dates: Option<(u64, u64)>,    // 0x00004104 (start, end)
+    pub disc_profile_id: Option<String>,       // 0x00004304 (16 bytes)
+    pub alt_title_ids: Vec<u32>,               // 0x000407FF
+    pub multidisc_media_ids: Vec<String>,      // 0x000406FF (16-byte MediaIds)
+    pub image_checksum: Option<u32>,           // 0x00018002
+    pub image_filetime: Option<u32>,           // 0x00018002
+    pub page_heap: Option<(u32, u32)>,         // 0x00028002 (size, flags)
+    pub logo_data: Option<String>,             // 0x000405FF
 }
 
 /// Image flag names (Xenia `xex2_image_flags`).
@@ -168,6 +185,27 @@ pub fn system_flag_names(flags: u32) -> Vec<String> {
         (0x20000000, "AvatarMetadataByXuid"),
         (0x40000000, "ControllerSwapping"),
         (0x80000000, "DashExtensibility"),
+    ];
+    NAMES
+        .iter()
+        .filter(|(b, _)| flags & b != 0)
+        .map(|(_, n)| n.to_string())
+        .collect()
+}
+
+/// System flags 2 names (XexTool `XexDefines.h`, `SYSFLAG2_*`).
+pub fn system_flag2_names(flags: u32) -> Vec<String> {
+    const NAMES: [(u32, &str); 10] = [
+        (0x00000001, "AllowNetworkReadCancel"),
+        (0x00000002, "UninterruptableReads"),
+        (0x00000004, "RequiresNXE"),
+        (0x00000008, "GamevoiceRequiredUI"),
+        (0x00000010, "TitleSetsPresenceString"),
+        (0x00000020, "NatalTiltControl"),
+        (0x00000040, "SupportsSkeletalTracking"),
+        (0x00000080, "RequiresSkeletalTracking"),
+        (0x00000100, "UseLargeHdsFileCache"),
+        (0x00000200, "TitleSupportsDeepLink"),
     ];
     NAMES
         .iter()
@@ -393,9 +431,23 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
     let mut heap_size = None;
     let mut fs_cache_size = None;
     let mut system_flags = None;
+    let mut system_flags2 = None;
     let mut tls = None;
     let mut static_libs = Vec::new();
     let mut pe_name = None;
+    let mut savegame_id = None;
+    let mut bounding_path = None;
+    let mut bounding_device_id = None;
+    let mut restrict_console_ids = Vec::new();
+    let mut restrict_kv_privs = None;
+    let mut restrict_dates = None;
+    let mut disc_profile_id = None;
+    let mut alt_title_ids = Vec::new();
+    let mut multidisc_media_ids = Vec::new();
+    let mut image_checksum = None;
+    let mut image_filetime = None;
+    let mut page_heap = None;
+    let mut logo_data = None;
     for i in 0..field_count {
         let base = xex_offset.checked_add(24 + i * 8)?;
         if base + 8 > buf.len() {
@@ -438,6 +490,15 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
                     );
                 }
             }
+            // ExecutionId savegame ID: u32 at ExecutionId data + 16.
+            0x00040006 => {
+                if let Some(e) = data_at(20) {
+                    savegame_id = Some(format!(
+                        "{:08X}",
+                        u32::from_be_bytes([buf[e + 16], buf[e + 17], buf[e + 18], buf[e + 19]])
+                    ));
+                }
+            }
             // Inline u32 scalars (verified on real files).
             0x00010001 => original_base = Some(val),
             0x00010100 => entry_point = Some(val),
@@ -446,6 +507,7 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
             0x00020301 => fs_cache_size = Some(val),
             0x00020401 => heap_size = Some(val),
             0x00030000 => system_flags = Some(val),
+            0x00030100 => system_flags2 = Some(val),
             // TLS info: 16 bytes at entry offset.
             0x00020104 => {
                 if let Some(e) = data_at(16) {
@@ -510,6 +572,194 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
                         s_end += 1;
                     }
                     pe_name = Some(String::from_utf8_lossy(&buf[e + 4..s_end]).to_string());
+                }
+            }
+            // Image checksum + filetime: u32 checksum + u32 filetime at offset.
+            0x00018002 => {
+                if let Some(e) = data_at(8) {
+                    image_checksum = Some(u32::from_be_bytes([
+                        buf[e],
+                        buf[e + 1],
+                        buf[e + 2],
+                        buf[e + 3],
+                    ]));
+                    image_filetime = Some(u32::from_be_bytes([
+                        buf[e + 4],
+                        buf[e + 5],
+                        buf[e + 6],
+                        buf[e + 7],
+                    ]));
+                }
+            }
+            // Page heap: u32 size + u32 flags at offset.
+            0x00028002 => {
+                if let Some(e) = data_at(8) {
+                    page_heap = Some((
+                        u32::from_be_bytes([buf[e], buf[e + 1], buf[e + 2], buf[e + 3]]),
+                        u32::from_be_bytes([buf[e + 4], buf[e + 5], buf[e + 6], buf[e + 7]]),
+                    ));
+                }
+            }
+            // Bounding pathname: size-prefixed NUL-terminated string at offset.
+            0x000080FF => {
+                if let Some(e) = data_at(4) {
+                    let total =
+                        u32::from_be_bytes([buf[e], buf[e + 1], buf[e + 2], buf[e + 3]]) as usize;
+                    let str_end = (e + 4 + total).min(buf.len());
+                    let mut s_end = e + 4;
+                    while s_end < str_end && buf[s_end] != 0 {
+                        s_end += 1;
+                    }
+                    bounding_path = Some(String::from_utf8_lossy(&buf[e + 4..s_end]).to_string());
+                }
+            }
+            // Bounding device ID: 20 bytes at offset.
+            0x00008105 => {
+                if let Some(e) = data_at(20) {
+                    bounding_device_id = Some(
+                        buf[e..e + 20]
+                            .iter()
+                            .map(|b| format!("{b:02X}"))
+                            .collect::<Vec<_>>()
+                            .join(""),
+                    );
+                }
+            }
+            // Restrict console IDs: infoSize + one or more 5-byte IDs at offset.
+            0x000042FF => {
+                if let Some(e) = data_at(4) {
+                    let total =
+                        u32::from_be_bytes([buf[e], buf[e + 1], buf[e + 2], buf[e + 3]]) as usize;
+                    let mut off = e + 4;
+                    let end = (e + total).min(buf.len());
+                    while off + 5 <= end {
+                        restrict_console_ids.push(
+                            buf[off..off + 5]
+                                .iter()
+                                .map(|b| format!("{b:02X}"))
+                                .collect::<Vec<_>>()
+                                .join(""),
+                        );
+                        off += 5;
+                    }
+                }
+            }
+            // Restrict KV privs: u64 mask + u64 val at offset.
+            0x00004004 => {
+                if let Some(e) = data_at(16) {
+                    restrict_kv_privs = Some((
+                        u64::from_be_bytes([
+                            buf[e],
+                            buf[e + 1],
+                            buf[e + 2],
+                            buf[e + 3],
+                            buf[e + 4],
+                            buf[e + 5],
+                            buf[e + 6],
+                            buf[e + 7],
+                        ]),
+                        u64::from_be_bytes([
+                            buf[e + 8],
+                            buf[e + 9],
+                            buf[e + 10],
+                            buf[e + 11],
+                            buf[e + 12],
+                            buf[e + 13],
+                            buf[e + 14],
+                            buf[e + 15],
+                        ]),
+                    ));
+                }
+            }
+            // Restrict dates: u64 start + u64 end at offset.
+            0x00004104 => {
+                if let Some(e) = data_at(16) {
+                    restrict_dates = Some((
+                        u64::from_be_bytes([
+                            buf[e],
+                            buf[e + 1],
+                            buf[e + 2],
+                            buf[e + 3],
+                            buf[e + 4],
+                            buf[e + 5],
+                            buf[e + 6],
+                            buf[e + 7],
+                        ]),
+                        u64::from_be_bytes([
+                            buf[e + 8],
+                            buf[e + 9],
+                            buf[e + 10],
+                            buf[e + 11],
+                            buf[e + 12],
+                            buf[e + 13],
+                            buf[e + 14],
+                            buf[e + 15],
+                        ]),
+                    ));
+                }
+            }
+            // Disc profile ID: 16 bytes at offset.
+            0x00004304 => {
+                if let Some(e) = data_at(16) {
+                    disc_profile_id = Some(
+                        buf[e..e + 16]
+                            .iter()
+                            .map(|b| format!("{b:02X}"))
+                            .collect::<Vec<_>>()
+                            .join(""),
+                    );
+                }
+            }
+            // Alt title IDs: infoSize + one or more u32 IDs at offset.
+            0x000407FF => {
+                if let Some(e) = data_at(4) {
+                    let total =
+                        u32::from_be_bytes([buf[e], buf[e + 1], buf[e + 2], buf[e + 3]]) as usize;
+                    let mut off = e + 4;
+                    let end = (e + total).min(buf.len());
+                    while off + 4 <= end {
+                        alt_title_ids.push(u32::from_be_bytes([
+                            buf[off],
+                            buf[off + 1],
+                            buf[off + 2],
+                            buf[off + 3],
+                        ]));
+                        off += 4;
+                    }
+                }
+            }
+            // Multidisc media IDs: infoSize + one or more 16-byte IDs at offset.
+            0x000406FF => {
+                if let Some(e) = data_at(4) {
+                    let total =
+                        u32::from_be_bytes([buf[e], buf[e + 1], buf[e + 2], buf[e + 3]]) as usize;
+                    let mut off = e + 4;
+                    let end = (e + total).min(buf.len());
+                    while off + 16 <= end {
+                        multidisc_media_ids.push(
+                            buf[off..off + 16]
+                                .iter()
+                                .map(|b| format!("{b:02X}"))
+                                .collect::<Vec<_>>()
+                                .join(""),
+                        );
+                        off += 16;
+                    }
+                }
+            }
+            // Logo data: size-prefixed blob at offset.
+            0x000405FF => {
+                if let Some(e) = data_at(4) {
+                    let total =
+                        u32::from_be_bytes([buf[e], buf[e + 1], buf[e + 2], buf[e + 3]]) as usize;
+                    let data_end = (e + 4 + total).min(buf.len());
+                    logo_data = Some(
+                        buf[e + 4..data_end]
+                            .iter()
+                            .map(|b| format!("{b:02X}"))
+                            .collect::<Vec<_>>()
+                            .join(""),
+                    );
                 }
             }
             _ => {}
@@ -593,6 +843,8 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         fs_cache_size,
         system_flags,
         system_flag_names: system_flags.map(system_flag_names).unwrap_or_default(),
+        system_flags2,
+        system_flag2_names: system_flags2.map(system_flag2_names).unwrap_or_default(),
         tls,
         static_libs,
         pe_name,
@@ -603,6 +855,19 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         xgd2_media_id,
         load_address,
         page_descriptors,
+        savegame_id,
+        bounding_path,
+        bounding_device_id,
+        restrict_console_ids,
+        restrict_kv_privs,
+        restrict_dates,
+        disc_profile_id,
+        alt_title_ids,
+        multidisc_media_ids,
+        image_checksum,
+        image_filetime,
+        page_heap,
+        logo_data,
     })
 }
 

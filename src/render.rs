@@ -420,6 +420,89 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                         ));
                     }
                 }
+                if let Some(v) = x.system_flags2 {
+                    out.push_str(&format!(
+                        "System flags 2: {v:08X}{}\n",
+                        if x.system_flag2_names.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({})", x.system_flag2_names.join(", "))
+                        }
+                    ));
+                }
+                if let Some(v) = &x.savegame_id {
+                    out.push_str(&format!("Save game ID: {v}\n"));
+                }
+                if let Some(v) = &x.bounding_path {
+                    out.push_str(&format!("Bounding path: {v}\n"));
+                }
+                if let Some(v) = &x.bounding_device_id {
+                    out.push_str(&format!("Bounding device ID: {v}\n"));
+                }
+                if !x.restrict_console_ids.is_empty() {
+                    out.push_str(&format!(
+                        "Restrict console IDs ({}):\n",
+                        x.restrict_console_ids.len()
+                    ));
+                    for id in x.restrict_console_ids.iter().take(10) {
+                        out.push_str(&format!("  {id}\n"));
+                    }
+                    if x.restrict_console_ids.len() > 10 {
+                        out.push_str(&format!(
+                            "  ... and {} more\n",
+                            x.restrict_console_ids.len() - 10
+                        ));
+                    }
+                }
+                if let Some((mask, val)) = x.restrict_kv_privs {
+                    out.push_str(&format!(
+                        "Restrict KV privs: mask={mask:016X} val={val:016X}\n"
+                    ));
+                }
+                if let Some((start, end)) = x.restrict_dates {
+                    out.push_str(&format!(
+                        "Restrict dates: start={start:016X} end={end:016X}\n"
+                    ));
+                }
+                if let Some(v) = &x.disc_profile_id {
+                    out.push_str(&format!("Disc profile ID: {v}\n"));
+                }
+                if !x.alt_title_ids.is_empty() {
+                    out.push_str(&format!("Alt title IDs ({}):\n", x.alt_title_ids.len()));
+                    for id in x.alt_title_ids.iter().take(10) {
+                        out.push_str(&format!("  {id:08X}\n"));
+                    }
+                    if x.alt_title_ids.len() > 10 {
+                        out.push_str(&format!("  ... and {} more\n", x.alt_title_ids.len() - 10));
+                    }
+                }
+                if !x.multidisc_media_ids.is_empty() {
+                    out.push_str(&format!(
+                        "Multidisc media IDs ({}):\n",
+                        x.multidisc_media_ids.len()
+                    ));
+                    for id in x.multidisc_media_ids.iter().take(10) {
+                        out.push_str(&format!("  {id}\n"));
+                    }
+                    if x.multidisc_media_ids.len() > 10 {
+                        out.push_str(&format!(
+                            "  ... and {} more\n",
+                            x.multidisc_media_ids.len() - 10
+                        ));
+                    }
+                }
+                if let Some(v) = x.image_checksum {
+                    out.push_str(&format!("Image checksum: {v:08X}\n"));
+                }
+                if let Some(v) = x.image_filetime {
+                    out.push_str(&format!("Image filetime: {v:016X}\n"));
+                }
+                if let Some((size, flags)) = x.page_heap {
+                    out.push_str(&format!("Page heap: size={size} flags={flags:08X}\n"));
+                }
+                if let Some(v) = &x.logo_data {
+                    out.push_str(&format!("Logo data: {v}…\n"));
+                }
             }
             out.push('\n');
         }
