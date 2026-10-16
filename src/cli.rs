@@ -57,6 +57,29 @@ pub(crate) struct Args {
     #[arg(long, value_name = "OUTDIR", help_heading = "STFS")]
     pub extract_thumbnail: Option<PathBuf>,
 
+    /// Dump the XEX basefile (PE executable) to a file.
+    /// Use with a single XEX input file; `-o/--output` sets the destination.
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with_all = [
+            "extract",
+            "extract_thumbnail",
+            "extract_iso",
+            "optimize",
+            "create",
+            "truncate",
+            "game_dir",
+            "dir",
+            "copy_out",
+            "md5",
+            "checksum",
+            "bench_extract_iso"
+        ],
+        help_heading = "XEX"
+    )]
+    pub dump_basefile: Option<PathBuf>,
+
     /// Extract XISO contents into OUTDIR (fast, multi-method).
     #[arg(
         long,

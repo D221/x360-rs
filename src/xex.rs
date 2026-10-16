@@ -76,6 +76,12 @@ pub struct XexExtendedInfo {
     pub image_filetime: Option<u32>,           // 0x00018002
     pub page_heap: Option<(u32, u32)>,         // 0x00028002 (size, flags)
     pub logo_data: Option<String>,             // 0x000405FF
+    /// Basefile format (0x000003FF): encryption/compression type.
+    pub basefile_enc_type: Option<u16>, // 0=not-encrypted, 1=encrypted
+    pub basefile_comp_type: Option<u16>,       // 1=raw, 2=compressed, 3=delta-compressed
+    /// Basefile data location within the XEX file (offset from XEX start, size in bytes).
+    pub basefile_offset: Option<u64>,
+    pub basefile_size: Option<u64>,
 }
 
 /// Image flag names (Xenia `xex2_image_flags`).
@@ -448,6 +454,10 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
     let mut image_filetime = None;
     let mut page_heap = None;
     let mut logo_data = None;
+    let mut basefile_enc_type = None;
+    let mut basefile_comp_type = None;
+    let mut basefile_offset = None;
+    let mut basefile_size = None;
     for i in 0..field_count {
         let base = xex_offset.checked_add(24 + i * 8)?;
         if base + 8 > buf.len() {
@@ -762,6 +772,13 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
                     );
                 }
             }
+            // Basefile format: infoSize + encType(u16) + compType(u16) at offset.
+            0x000003FF => {
+                if let Some(e) = data_at(8) {
+                    basefile_enc_type = Some(u16::from_be_bytes([buf[e + 4], buf[e + 5]]));
+                    basefile_comp_type = Some(u16::from_be_bytes([buf[e + 6], buf[e + 7]]));
+                }
+            }
             _ => {}
         }
     }
@@ -794,6 +811,23 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
     });
     let allowed_media = sec(0x17C, 4)
         .map(|at| u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]));
+    // Basefile data starts right after the security info (which includes all
+    // section info): offset = securityInfoOffset + securityInfo.size, size = imageSize.
+    // Note: size is not capped here because the buffer may be smaller than the
+    // full file; callers clamp to remaining file bytes when reading.
+    if let Some(sec_off) = u32_at(0x10) {
+        let sec_base = xex_offset.checked_add(sec_off as usize)?;
+        if let Some(sec_size) =
+            sec(0, 4).map(|at| u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]))
+        {
+            if let Some(img_size) = sec(4, 4)
+                .map(|at| u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]))
+            {
+                basefile_offset = Some(sec_base.checked_add(sec_size as usize)? as u64);
+                basefile_size = Some(img_size as u64);
+            }
+        }
+    }
     let mut page_descriptors = Vec::new();
     if let Some(at) = sec(0x180, 4) {
         let count = u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]) as usize;
@@ -868,6 +902,10 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         image_filetime,
         page_heap,
         logo_data,
+        basefile_enc_type,
+        basefile_comp_type,
+        basefile_offset,
+        basefile_size,
     })
 }
 

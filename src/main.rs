@@ -29,6 +29,7 @@ use crate::parse::{parse_file, parse_game_dir, parse_iso};
 use crate::render::{emit, report_summary};
 use crate::report::Report;
 use crate::stfs::{extract_report, open_stfs_reader, verify_stfs};
+use crate::tu_parser::format_size;
 use crate::write::{create_xiso_from_dir_with_progress, create_xiso_from_mapped_dir_with_progress};
 use crate::write::{create_xiso_from_parsed_with_progress, remap::parse_map_rule};
 
@@ -613,6 +614,74 @@ fn main() -> Result<()> {
             Ok(other) => {
                 if args.verbose {
                     eprintln!("  -> {}", report_summary(&other));
+                }
+                // XEX basefile dump: extract the raw basefile (PE executable)
+                // from the XEX container to a file.
+                if let Some(dest) = &args.dump_basefile {
+                    if let Report::Xex(info) = &other {
+                        let Some(off) = info.extended.as_ref().and_then(|e| e.basefile_offset)
+                        else {
+                            eprintln!(
+                                "warning: {}: no basefile offset in XEX, skipping dump",
+                                file_path.display()
+                            );
+                            failures += 1;
+                            continue;
+                        };
+                        let Some(size) = info.extended.as_ref().and_then(|e| e.basefile_size)
+                        else {
+                            eprintln!(
+                                "warning: {}: no basefile size in XEX, skipping dump",
+                                file_path.display()
+                            );
+                            failures += 1;
+                            continue;
+                        };
+                        if !args.quiet {
+                            eprintln!(
+                                "  dumping basefile ({} bytes) from {} to {}",
+                                format_size(size),
+                                file_path.display(),
+                                dest.display()
+                            );
+                        }
+                        match (|| -> Result<()> {
+                            let mut f = std::fs::File::open(file_path)
+                                .with_context(|| format!("cannot open {}", file_path.display()))?;
+                            use std::io::{Read, Seek, SeekFrom};
+                            let meta = std::fs::metadata(file_path)
+                                .with_context(|| format!("cannot stat {}", file_path.display()))?;
+                            let file_size = meta.len();
+                            let read_size = size.min(file_size.saturating_sub(off));
+                            f.seek(SeekFrom::Start(off))?;
+                            let mut data = vec![0u8; read_size as usize];
+                            f.read_exact(&mut data)?;
+                            std::fs::write(dest, &data)?;
+                            Ok(())
+                        })() {
+                            Ok(()) => {
+                                if !args.quiet {
+                                    eprintln!("  dumped basefile to {}", dest.display());
+                                }
+                            }
+                            Err(e) => {
+                                failures += 1;
+                                eprintln!(
+                                    "warning: dump-basefile {}: {:#}",
+                                    file_path.display(),
+                                    e
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        eprintln!(
+                            "warning: {}: --dump-basefile only works for XEX files, skipping",
+                            file_path.display()
+                        );
+                        failures += 1;
+                        continue;
+                    }
                 }
                 if args.verify || args.extract.is_some() {
                     let is_xiso = matches!(&other, Report::Xiso(_));

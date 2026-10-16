@@ -503,6 +503,33 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 if let Some(v) = &x.logo_data {
                     out.push_str(&format!("Logo data: {v}…\n"));
                 }
+                if let Some(v) = x.basefile_enc_type {
+                    out.push_str(&format!(
+                        "Basefile encryption: {v}{}\n",
+                        if v == 0 {
+                            " (not encrypted)"
+                        } else {
+                            " (encrypted)"
+                        }
+                    ));
+                }
+                if let Some(v) = x.basefile_comp_type {
+                    out.push_str(&format!(
+                        "Basefile compression: {v}{}\n",
+                        match v {
+                            1 => " (raw)",
+                            2 => " (compressed)",
+                            3 => " (delta-compressed)",
+                            _ => " (unknown)",
+                        }
+                    ));
+                }
+                if let Some(v) = x.basefile_offset {
+                    out.push_str(&format!("Basefile offset: 0x{:X}\n", v));
+                }
+                if let Some(v) = x.basefile_size {
+                    out.push_str(&format!("Basefile size: {} ({})\n", format_size(v), v));
+                }
             }
             out.push('\n');
         }
