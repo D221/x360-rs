@@ -4,6 +4,7 @@ use std::io::{Read, Seek, SeekFrom};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use xxhash_rust::xxh3::xxh3_64;
 
 /// Execution info from a full game XEX header (ExecutionId field
 /// 0x00040006), per iso2god-rs `src/executable/xex.rs`.
@@ -82,6 +83,10 @@ pub struct XexExtendedInfo {
     /// Basefile data location within the XEX file (offset from XEX start, size in bytes).
     pub basefile_offset: Option<u64>,
     pub basefile_size: Option<u64>,
+    /// XXH3-64 hash over all page-descriptor digests concatenated,
+    /// per Xenia `user_module.cc` module identity. `None` when no
+    /// page descriptors are present.
+    pub xxh3_module_id: Option<String>,
 }
 
 /// Unix epoch seconds (u32) to `YYYY-MM-DD HH:MM:SS` UTC.
@@ -856,6 +861,7 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         }
     }
     let mut page_descriptors = Vec::new();
+    let mut xxh3_digest_bytes = Vec::new();
     if let Some(at) = sec(0x180, 4) {
         let count = u32::from_be_bytes([buf[at], buf[at + 1], buf[at + 2], buf[at + 3]]) as usize;
         for i in 0..count.min(4096) {
@@ -865,6 +871,7 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
             }
             let info = u32::from_be_bytes([buf[base], buf[base + 1], buf[base + 2], buf[base + 3]]);
             let digest = buf[base + 4..base + 24].to_vec();
+            xxh3_digest_bytes.extend_from_slice(&digest);
             page_descriptors.push(XexPageDescriptor {
                 info,
                 page_count: info >> 4,
@@ -876,6 +883,13 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
             });
         }
     }
+    // XXH3-64 module identity over all page-descriptor digests concatenated,
+    // per Xenia `user_module.cc`. Only computed when page descriptors exist.
+    let xxh3_module_id = if !xxh3_digest_bytes.is_empty() {
+        Some(format!("{:016X}", xxh3_64(&xxh3_digest_bytes)))
+    } else {
+        None
+    };
     let region_names = security_region
         .map(security_region_names)
         .unwrap_or_default();
@@ -934,6 +948,7 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         basefile_comp_type,
         basefile_offset,
         basefile_size,
+        xxh3_module_id,
     })
 }
 

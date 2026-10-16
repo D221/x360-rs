@@ -505,6 +505,9 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 if let Some((size, flags)) = x.page_heap {
                     out.push_str(&format!("Page heap: size={size} flags={flags:08X}\n"));
                 }
+                if let Some(v) = &x.xxh3_module_id {
+                    out.push_str(&format!("XXH3 module ID: {v}\n"));
+                }
                 // Logo data is raw boot-logo image bytes — kept in JSON but
                 // too noisy for the text report.
                 if let Some(v) = x.basefile_enc_type {

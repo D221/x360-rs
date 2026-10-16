@@ -21,6 +21,7 @@ windows = { version = "0.62", optional = true, features = [
     "Win32_Security",
 ] }
 md5 = "0.8.1"
+xxhash-rust = { version = "0.8.19", features = ["xxh3"] }
 sha3 = "0.12.0"
 wax = "0.7.0"
 
