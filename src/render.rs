@@ -223,8 +223,8 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
             out.push_str(&format!("=== {} ===\n", info.file_path));
             out.push_str(&format!("File size: {}\n", format_size(info.file_size)));
             out.push_str(&format!(
-                "Format: XDBF title database (magic {}, version {})\n",
-                info.magic, info.version
+                "Format: XDBF title database ({} variant, magic {}, version {})\n",
+                info.variant, info.magic, info.version
             ));
             match &info.title_name {
                 Some(t) => out.push_str(&format!("Title: {t}\n")),

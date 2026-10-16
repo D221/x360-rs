@@ -727,6 +727,50 @@ fn test_mapped_dry_run_writes_nothing() {
 }
 
 #[test]
+fn test_xdbf_gpd_variant_parses() {
+    use crate::xdbf::parse_xdbf;
+    let dir = std::env::temp_dir().join(format!("tu_gpd_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // GPD form: 24B header, capacity 512-entry table, 1-entry free table.
+    let mut blob = Vec::new();
+    blob.extend_from_slice(b"XDBF");
+    blob.extend_from_slice(&0x10000u32.to_be_bytes());
+    blob.extend_from_slice(&512u32.to_be_bytes());
+    blob.extend_from_slice(&2u32.to_be_bytes());
+    blob.extend_from_slice(&1u32.to_be_bytes());
+    blob.extend_from_slice(&0u32.to_be_bytes());
+    // Entry 0: namespace 3 (Setting), id 0x10040003, 4 payload bytes.
+    blob.extend_from_slice(&3u16.to_be_bytes());
+    blob.extend_from_slice(&0x10040003u64.to_be_bytes());
+    blob.extend_from_slice(&0u32.to_be_bytes());
+    blob.extend_from_slice(&4u32.to_be_bytes());
+    // Entry 1: namespace 5 (String), id 7, "hi!" + NUL.
+    blob.extend_from_slice(&5u16.to_be_bytes());
+    blob.extend_from_slice(&7u64.to_be_bytes());
+    blob.extend_from_slice(&4u32.to_be_bytes());
+    blob.extend_from_slice(&4u32.to_be_bytes());
+    // Pad the rest of the 512-entry table + 8B free table with zeros.
+    while blob.len() < 24 + 512 * 18 + 8 {
+        blob.push(0);
+    }
+    blob.extend_from_slice(&[1, 2, 3, 4]);
+    blob.extend_from_slice(b"hi!\0");
+    let path = dir.join("test.gpd");
+    std::fs::write(&path, &blob).unwrap();
+    let info = parse_xdbf(&path, blob.len() as u64).expect("parses");
+    assert_eq!(info.variant, "gpd");
+    assert_eq!(info.num_entries, 2);
+    assert_eq!(info.entries[0].namespace, Some(3));
+    assert_eq!(info.entries[0].identifier, 0x10040003);
+    assert_eq!(info.entries[1].namespace, Some(5));
+    let rep = crate::xdbf::report_info(&info);
+    assert_eq!(rep.entries[0].resource, "Setting/0000000010040003");
+    assert_eq!(rep.entries[0].namespace.as_deref(), Some("Setting"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_xdbf_parses_entries_and_title() {
     use crate::xdbf::{parse_xdbf, resource_name};
     let dir = std::env::temp_dir().join(format!("tu_xdbf_{}", std::process::id()));
@@ -769,8 +813,12 @@ fn test_xdbf_parses_entries_and_title() {
     let info = parse_xdbf(&path, blob.len() as u64).expect("parses");
     assert_eq!(info.num_entries, 2);
     assert_eq!(info.title_name.as_deref(), Some("Test Game"));
-    assert_eq!(resource_name(0x58414348, 2), "XACH/Achievement");
-    assert_eq!(resource_name(1, 3), "00000001/TitleInfo");
+    assert_eq!(resource_name(0x58414348, 2, None), "XACH/Achievement");
+    assert_eq!(resource_name(1, 3, None), "00000001/TitleInfo");
+    assert_eq!(
+        resource_name(0x10040003, 0, Some(3)),
+        "Setting/0000000010040003"
+    );
     // Report conversion carries file offsets.
     let rep = crate::xdbf::report_info(&info);
     assert_eq!(rep.entries.len(), 2);

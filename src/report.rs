@@ -56,7 +56,8 @@ pub struct XdbfFileInfo {
     pub file_path: String,
     pub file_size: u64,
     pub magic: String,
-    pub version: u16,
+    pub version: u32,
+    pub variant: String,
     pub num_entries: u32,
     pub title_name: Option<String>,
     pub entries: Vec<XdbfEntryInfo>,
@@ -65,6 +66,7 @@ pub struct XdbfFileInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XdbfEntryInfo {
     pub identifier: String,
+    pub namespace: Option<String>,
     pub resource: String,
     pub offset: u64,
     pub size: u64,
