@@ -11,6 +11,7 @@ mod report;
 mod stfs;
 #[cfg(test)]
 mod tests;
+mod title_id;
 mod tu_header;
 mod tu_parser;
 mod write;

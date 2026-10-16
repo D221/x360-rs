@@ -44,8 +44,11 @@ impl IsoType {
 /// GDF directory entry attribute flags (iso2god-rs `src/iso/directory_table.rs`).
 pub const GDF_ATTR_DIRECTORY: u8 = 0x10;
 
-/// GDF directory entry attributes (from xdvdfs/xdvdfs-core/src/layout/attributes.rs).
-/// Bits: 0=read_only, 1=hidden, 2=system, 4=directory, 5=archive, 7=normal
+/// GDF directory entry attributes (from xdvdfs/xdvdfs-core/src/layout/attributes.rs
+/// plus `0x40` Device from the GDFX doc).
+/// Bits: 0=read_only, 1=hidden, 2=system, 4=directory, 5=archive, 6=device,
+/// 7=normal. (`0x100` Temporary from the GDFX doc cannot occur: the on-disk
+/// field is a single byte.)
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct IsoEntryAttrs {
     pub read_only: bool,
@@ -53,6 +56,7 @@ pub struct IsoEntryAttrs {
     pub system: bool,
     pub directory: bool,
     pub archive: bool,
+    pub device: bool,
     pub normal: bool,
 }
 
@@ -227,6 +231,7 @@ pub(crate) fn walk_gdf_table(
             system: attrs_byte & 0x04 != 0,
             directory: is_dir,
             archive: attrs_byte & 0x20 != 0,
+            device: attrs_byte & 0x40 != 0,
             normal: attrs_byte & 0x80 != 0,
         };
         let path = if prefix.is_empty() {

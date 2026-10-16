@@ -41,6 +41,9 @@ fn attrs_to_byte(attrs: &crate::iso::IsoEntryAttrs) -> u8 {
     if attrs.archive {
         byte |= 0x20;
     }
+    if attrs.device {
+        byte |= 0x40;
+    }
     if attrs.normal {
         byte |= 0x80;
     }

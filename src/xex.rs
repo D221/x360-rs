@@ -31,6 +31,15 @@ pub struct XexExtendedInfo {
     pub lan_key: Option<String>,
     pub security_region: Option<u32>,
     pub region_names: Vec<String>,
+    /// Every optional-header entry as `(ID, data)` hex, including ones with
+    /// no dedicated decoder (Xenia `UserModule::Dump` default arm).
+    pub headers: Vec<XexHeaderEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct XexHeaderEntry {
+    pub id: String,
+    pub data: String,
 }
 
 /// Named module flags (XEX header offset 4).
@@ -234,6 +243,7 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
     }
     let mut rating_bytes: Option<[u8; 12]> = None;
     let mut lan_key = None;
+    let mut headers = Vec::new();
     for i in 0..field_count {
         let base = xex_offset.checked_add(24 + i * 8)?;
         if base + 8 > buf.len() {
@@ -241,6 +251,10 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         }
         let key = u32::from_be_bytes([buf[base], buf[base + 1], buf[base + 2], buf[base + 3]]);
         let val = u32::from_be_bytes([buf[base + 4], buf[base + 5], buf[base + 6], buf[base + 7]]);
+        headers.push(XexHeaderEntry {
+            id: format!("{key:08X}"),
+            data: format!("{val:08X}"),
+        });
         // Entry data lives at `val` as a file offset for these IDs
         // (their low bytes are not 0x01, which would mean inline data).
         let data_at = |len: usize| -> Option<usize> {
@@ -301,6 +315,7 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
         lan_key,
         security_region,
         region_names,
+        headers,
     })
 }
 

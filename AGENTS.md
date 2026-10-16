@@ -56,6 +56,7 @@ tu_parser/
 │   ├── tu_parser.rs      # TU-specific STFS parsing (header, file table, XEX region mask)
 │   ├── tu_header.rs      # STFS/CON header field extraction
 │   ├── regions.rs        # Region mask bit decoding (matches original Title Update Checker)
+│   ├── title_id.rs         # Title-ID classifiers (publisher, XBLA/app/system/OG classes, Xenia title_id_utils.h)
 │   ├── report.rs         # Report types (Stfs, Xiso, Xex, Xbe, GameDir) for JSON/text output
 │   ├── render.rs         # Text/JSON output formatting (emit writes -o file or stdout)
 │   ├── write/            # XISO creation/optimization (padding removal)

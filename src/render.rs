@@ -56,8 +56,15 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
             ));
             out.push_str(&format!("Kind: {}\n", info.content_kind));
             out.push_str(&format!("Media ID: {}\n", info.media_id));
-            out.push_str(&format!("Base title ID: {}\n", info.base_title_id));
+            out.push_str(&format!(
+                "Base title ID: {} ({})\n",
+                info.base_title_id, info.title_class
+            ));
             out.push_str(&format!("Content type: {}\n", info.content_type));
+            out.push_str(&format!(
+                "Bootable: {}\n",
+                if info.bootable { "YES" } else { "NO" }
+            ));
             out.push_str(&format!("Title: {}\n", info.display_title));
             out.push_str(&format!(
                 "Region mask: {}\n",
@@ -172,6 +179,9 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                     if e.attrs.archive {
                         attr_strs.push("A");
                     }
+                    if e.attrs.device {
+                        attr_strs.push("V");
+                    }
                     if e.attrs.normal {
                         attr_strs.push("N");
                     }
@@ -235,6 +245,12 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                         x.region_names.join(" ")
                     )),
                     None => out.push_str("Security region: not present\n"),
+                }
+                if !x.headers.is_empty() {
+                    out.push_str(&format!("Optional headers ({}):\n", x.headers.len()));
+                    for h in &x.headers {
+                        out.push_str(&format!("  {}: {}\n", h.id, h.data));
+                    }
                 }
             }
             out.push('\n');

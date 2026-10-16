@@ -140,6 +140,37 @@ fn xex_exec_info_parses() {
 }
 
 #[test]
+fn title_id_classification_matches_xenia() {
+    use crate::title_id::*;
+    // Mirrors static_asserts in xenia title_id_utils.h.
+    assert!(is_xbla_title(0x5841127D));
+    assert!(!is_xbla_title(0x4D5309C9));
+    assert!(is_system_title(DASHBOARD_ID));
+    assert!(!is_system_title(0x4D5308BC));
+    assert!(!is_system_title(0x5841089A));
+    assert!(is_original_xbox_title(0x41430006));
+    assert!(!is_original_xbox_title(0x4D5308BC));
+    assert_eq!(classify(DASHBOARD_ID), "Dashboard");
+    assert_eq!(classify(0x5841089A), "XBLA Game");
+    assert_eq!(classify(0x4D5308BC), "Xbox 360 Game");
+    assert_eq!(classify(0x41430006), "Original Xbox Game");
+    assert_eq!(publisher(0x4D5307E6), ('M', 'S'));
+}
+
+#[test]
+fn content_type_names_cover_xenia_table() {
+    use crate::constants::content_type_name;
+    assert_eq!(content_type_name(0x00000001), "Saved Game");
+    assert_eq!(content_type_name(0x00004000), "Installed Game");
+    assert_eq!(content_type_name(0x00080000), "Game Demo");
+    // 0x000B0000 collides with our TU constant; TU wins (detection relies on it).
+    assert_eq!(content_type_name(0x000B0000), "Title Update");
+    assert!(crate::constants::content_type_is_bootable(0x000D0000));
+    assert!(crate::constants::content_type_is_bootable(0x00080000));
+    assert!(!crate::constants::content_type_is_bootable(0x000B0000));
+}
+
+#[test]
 fn xex_extended_info_parses() {
     use crate::xex::{module_flag_names, parse_xex_extended_info};
     // Synthetic XEX2 header: flags + ratings + LAN key + security region.
@@ -204,6 +235,9 @@ fn xex_extended_info_parses() {
     assert!(bare_info.ratings.is_none());
     assert!(bare_info.lan_key.is_none());
     assert!(bare_info.security_region.is_none());
+    // Raw header table mirrors the walked entries.
+    assert_eq!(info.headers.len(), 2);
+    assert_eq!(info.headers[0].id, "00040310");
     // Not an XEX at all.
     assert!(parse_xex_extended_info(&[0u8; 8], 0).is_none());
 }
