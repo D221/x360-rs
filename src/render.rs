@@ -495,7 +495,12 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                     out.push_str(&format!("Image checksum: {v:08X}\n"));
                 }
                 if let Some(v) = x.image_filetime {
-                    out.push_str(&format!("Image filetime: {v:016X}\n"));
+                    out.push_str(&format!(
+                        "Image filetime: {v:016X}{}\n",
+                        crate::xex::unix_timestamp_to_string(v)
+                            .map(|s| format!(" = {s}"))
+                            .unwrap_or_default()
+                    ));
                 }
                 if let Some((size, flags)) = x.page_heap {
                     out.push_str(&format!("Page heap: size={size} flags={flags:08X}\n"));
