@@ -88,7 +88,8 @@ Design docs (not in this dir): `../docs/superpowers/specs/` + `../docs/superpowe
 - Hash verification (--verify): header SHA1, top hash (T0 / L1 / L2 by package size), every table and used data block hash across all three hash levels
 - Extraction: STFS (--extract) and XISO (--extract-iso) both create subfolder named by Title ID (XISO) or Base Title ID (STFS)
 - XISO extraction auto-selects fastest method: parallel on Windows for >2GB, mmap otherwise
-- JSON output: tagged unions with type: stfs | xiso | xex | xbe | gamedir
+- STFS reports include header metadata (content size/versions/IDs/licenses/thumbnails/locales) plus title class and bootable flag
+- JSON output: tagged unions with type: stfs | xiso | xex | xbe | xdbf | gamedir
 - Directory sweep (--dir --recursive): unrecognized files warn and continue (e.g., GOD DataNNNN parts)
 - XISO optimize (--optimize): two-pass rebuild with contiguous sectors from 33; outputs **XSF by default** (smallest, same as extract-xiso); `--preserve-format` keeps input format (XGD3/XGD2/XGD1, larger files due to format offset); inputs already tagged optimized by extract-xiso (`in!xiso!` at file offset 31337) are skipped with a message; `--in-place` creates .bak backup with restore-on-failure; `--verify-output` re-parses and compares entries. Outputs carry **no** `in!xiso!` tag (pure).
 - Directory tables are written as balanced BST layout (`dirtab.rs::layout_table`), not right-linked lists; readers must tree-walk. Unresolvable directory `child_index` in `img.rs` is a hard `bail!` (no silent fallback) - a failed optimize leaves no output, never a corrupt one.

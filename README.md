@@ -19,12 +19,12 @@ No GUI, no dependencies on original tools — everything parsed directly from th
 - Parses embedded game XEX `ExecutionId` field (`0x00040006`, per iso2god-rs) for media/version/title IDs
 - Extracts **region mask** (BE u32 at `XEX2` + `0x1A0`) and decodes to region names using same bit tests as Title Update Checker (`PAL(A)`, `PAL(E)`, `NTSC/J`, `NTSC/J(J)`, `NTSC/J(C)`, `NTSC/J(0)`, `NTSC/U`, `Region Free`)
 - Lists STFS file table (64-byte entries at `0xC000`, densely packed — stops at first all-zero slot): filename, table offset, file size (BE u32 at entry+`0x34`), directory flag
-- Parses raw **XISO/GDF** images (`MICROSOFT*XBOX*MEDIA` at sector `0x20`, XSF/XGD2/XGD1/XGD3): volume descriptor (magic, root table, **creation timestamp**), recursive directory tables with **file attributes** (read-only, hidden, system, directory, archive, normal) and **tree structure** (left/right child offsets), `default.xex`/`default.xbe` resolution — fully streaming, safe on multi-GB images
-- Parses standalone **XEX** (`ExecutionId`) and **XBE** (title/version) executables, and extracted game directories (`--game-dir`: tree stats + executable info)
-- **Verifies** STFS hash chains (`--verify`): header SHA1, top hash, level-0 table hashes, every used data block hash. Exit code 1 on failure.
+- Parses raw **XISO/GDF** images (`MICROSOFT*XBOX*MEDIA` at sector `0x20`, XSF/XGD2/XGD1/XGD3): volume descriptor (magic, root table, **creation timestamp**), recursive directory tables with **file attributes** (read-only, hidden, system, directory, archive, device, normal) and **tree structure** (left/right child offsets), `default.xex`/`default.xbe` resolution — fully streaming, safe on multi-GB images
+- Parses standalone **XEX** (`ExecutionId` + extended headers: module/system/image flags, ratings, LAN key, regions, entry addresses, TLS, static libs, PE name, page descriptors) and **XBE** (title/version) executables, **XDBF** title databases (XEX-embedded + GPD variants, with GPD achievement/title/setting decoders), and extracted game directories (`--game-dir`: tree stats + executable info)
+- **Verifies** STFS hash chains (`--verify`): header SHA1, top hash (T0/L1/L2 by size), every table and used data block hash across all three levels. Exit code 1 on failure.
 - **Extracts** STFS contents (`--extract <DIR>`) with tree recreation, verifying every block during the walk
 - **Extracts** XISO/GDF contents (`--extract-iso <DIR>`) with multi-threaded parallel extraction (auto-selects fastest method: `parallel_4` on Windows, `mmap` on Unix). Benchmark mode (`--bench-extract-iso`) tests all methods and reports throughput.
-- Text or JSON output, single files or whole directories (`--dir`, `--recursive`). JSON reports are tagged unions (`"type": "stfs" | "xiso" | "xex" | "xbe" | "gamedir"`). Unrecognized files in directory sweeps warn and continue instead of aborting.
+- Text or JSON output, single files or whole directories (`--dir`, `--recursive`). JSON reports are tagged unions (`"type": "stfs" | "xiso" | "xex" | "xbe" | "xdbf" | "gamedir"`). Unrecognized files in directory sweeps warn and continue instead of aborting.
 - Extraction creates a subfolder named by Title ID (XISO) or Base Title ID (STFS) inside the output directory.
 
 ## Building
@@ -91,7 +91,7 @@ x360-rs file --show-entries --show-strings -v
 | `--extract-thumbnail <DIR>` | Extract STFS dashboard thumbnails into `DIR` as `<base-title-id>_<kind>.<format>` files |
 | `--extract-iso <DIR>` | Extract XISO/GDF contents into `DIR/<TitleID>/` (multi-threaded, auto-best method) |
 | `--copy-out <PATH>` | Copy a single file or directory out of an XISO image (same as xdvdfs `copy-out`); uses `-o` as destination; requires one input file |
-| `--md5` | Print MD5 checksums for files in XISO image(s) (same as xdvdfs `md5`, files only) |
+| `--md5` | Print MD5 checksums for entries in XISO image(s) (same as xdvdfs `md5`; files and directory tables) |
 | `--checksum` | Print a deterministic content checksum identical to xdvdfs `checksum` (SHA3-256 over sorted `/path` keys plus file bytes) |
 | `--bench-extract-iso` | Benchmark all XISO extraction methods, report fastest |
 | `--optimize` | Rebuild XISO with contiguous sectors (removes padding); uses `-o` as destination; `--in-place` overwrites with `.bak` backup; `--verify-output` re-parses and compares |
