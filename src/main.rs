@@ -683,6 +683,151 @@ fn main() -> Result<()> {
                         continue;
                     }
                 }
+                // XEX resource dumping: extract XEX resources (SPA blobs,
+                // game icons) to files using flat virtual-address mapping.
+                if let Some(res_dir) = &args.dump_resources {
+                    if let Report::Xex(info) = &other {
+                        let Some(ext) = &info.extended else {
+                            eprintln!(
+                                "warning: {}: no extended XEX info, skipping resource dump",
+                                file_path.display()
+                            );
+                            failures += 1;
+                            continue;
+                        };
+                        // Find resource directory offset from image entry 0x000002FF.
+                        let Some(res_off_hex) = ext
+                            .headers
+                            .iter()
+                            .find(|h| h.id == "000002FF")
+                            .map(|h| h.data.trim_start_matches("0x").trim_start_matches('0'))
+                        else {
+                            eprintln!(
+                                "warning: {}: no resource section in XEX, skipping dump",
+                                file_path.display()
+                            );
+                            failures += 1;
+                            continue;
+                        };
+                        let Ok(res_off) = u64::from_str_radix(res_off_hex, 16) else {
+                            eprintln!(
+                                "warning: {}: invalid resource section offset, skipping dump",
+                                file_path.display()
+                            );
+                            failures += 1;
+                            continue;
+                        };
+                        if !args.quiet {
+                            eprintln!(
+                                "  dumping resources from {} to {}",
+                                file_path.display(),
+                                res_dir.display()
+                            );
+                        }
+                        match (|| -> Result<()> {
+                            use std::io::{Read, Seek, SeekFrom};
+                            let meta = std::fs::metadata(file_path)
+                                .with_context(|| format!("cannot stat {}", file_path.display()))?;
+                            let mut f = std::fs::File::open(file_path)
+                                .with_context(|| format!("cannot open {}", file_path.display()))?;
+                            std::fs::create_dir_all(res_dir)?;
+                            // Read resource directory: s32 infoSize + entries.
+                            // infoSize includes itself; entries are 16 bytes each
+                            // (8 char name + u32 BE addr + u32 BE size), all big-endian.
+                            f.seek(SeekFrom::Start(res_off))?;
+                            let mut info_size_buf = [0u8; 4];
+                            f.read_exact(&mut info_size_buf)?;
+                            let info_size = i32::from_be_bytes(info_size_buf) as u64;
+                            if info_size < 20 {
+                                anyhow::bail!(
+                                    "resource directory too small (infoSize={info_size})"
+                                );
+                            }
+                            let entry_count = ((info_size - 4) / 16) as usize;
+                            if entry_count == 0 {
+                                eprintln!("warning: {}: no resources found", file_path.display());
+                                return Ok(());
+                            }
+                            let load_addr = ext.load_address.ok_or_else(|| {
+                                anyhow::anyhow!("no load address for resource address mapping")
+                            })?;
+                            let base_off = ext.basefile_offset.ok_or_else(|| {
+                                anyhow::anyhow!("no basefile offset for resource address mapping")
+                            })?;
+                            // Read each resource entry. Flat virtual-address ->
+                            // file offset mapping: offset = basefile_offset + (addr - load_address).
+                            // Exact for raw/unencrypted basefiles; encrypted basefiles
+                            // yield encrypted data (no decryption keys available).
+                            for i in 0..entry_count {
+                                let entry_off = res_off
+                                    .checked_add(4)
+                                    .and_then(|o| o.checked_add(i as u64 * 16))
+                                    .ok_or_else(|| {
+                                        anyhow::anyhow!("resource entry offset overflow")
+                                    })?;
+                                f.seek(SeekFrom::Start(entry_off))?;
+                                let mut entry = [0u8; 16];
+                                f.read_exact(&mut entry)?;
+                                let name = std::str::from_utf8(&entry[0..8])
+                                    .unwrap_or("")
+                                    .trim_end_matches('\0')
+                                    .trim_end_matches(' ')
+                                    .to_string();
+                                if name.is_empty() {
+                                    continue;
+                                }
+                                let rva =
+                                    u32::from_be_bytes([entry[8], entry[9], entry[10], entry[11]]);
+                                let size = u32::from_be_bytes([
+                                    entry[12], entry[13], entry[14], entry[15],
+                                ]);
+                                if size == 0 {
+                                    continue;
+                                }
+                                let rva_rel = rva.saturating_sub(load_addr);
+                                let abs_off =
+                                    base_off.checked_add(rva_rel as u64).ok_or_else(|| {
+                                        anyhow::anyhow!("resource file offset overflow")
+                                    })?;
+                                let read_size = size.min(meta.len().saturating_sub(abs_off) as u32);
+                                f.seek(SeekFrom::Start(abs_off))?;
+                                let mut data = vec![0u8; read_size as usize];
+                                f.read_exact(&mut data)?;
+                                let out_path = res_dir.join(&name);
+                                std::fs::write(&out_path, &data)?;
+                                if !args.quiet {
+                                    eprintln!(
+                                        "  dumped resource {name} ({read_size} bytes) to {}",
+                                        out_path.display()
+                                    );
+                                }
+                            }
+                            Ok(())
+                        })() {
+                            Ok(()) => {
+                                if !args.quiet {
+                                    eprintln!("  dumped resources to {}", res_dir.display());
+                                }
+                            }
+                            Err(e) => {
+                                failures += 1;
+                                eprintln!(
+                                    "warning: dump-resources {}: {:#}",
+                                    file_path.display(),
+                                    e
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        eprintln!(
+                            "warning: {}: --dump-resources only works for XEX files, skipping",
+                            file_path.display()
+                        );
+                        failures += 1;
+                        continue;
+                    }
+                }
                 if args.verify || args.extract.is_some() {
                     let is_xiso = matches!(&other, Report::Xiso(_));
                     if is_xiso && args.extract.is_some() {

@@ -74,11 +74,36 @@ pub(crate) struct Args {
             "copy_out",
             "md5",
             "checksum",
-            "bench_extract_iso"
+            "bench_extract_iso",
+            "dump_resources"
         ],
         help_heading = "XEX"
     )]
     pub dump_basefile: Option<PathBuf>,
+
+    /// Dump XEX resources (SPA blobs, game icons) to a directory.
+    /// Use with a single XEX input file; creates one file per resource.
+    #[arg(
+        long,
+        value_name = "DIR",
+        conflicts_with_all = [
+            "extract",
+            "extract_thumbnail",
+            "extract_iso",
+            "optimize",
+            "create",
+            "truncate",
+            "game_dir",
+            "dir",
+            "copy_out",
+            "md5",
+            "checksum",
+            "bench_extract_iso",
+            "dump_basefile"
+        ],
+        help_heading = "XEX"
+    )]
+    pub dump_resources: Option<PathBuf>,
 
     /// Extract XISO contents into OUTDIR (fast, multi-method).
     #[arg(

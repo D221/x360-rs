@@ -864,10 +864,11 @@ pub fn parse_xex_extended_info(buf: &[u8], xex_offset: usize) -> Option<XexExten
                 break;
             }
             let info = u32::from_be_bytes([buf[base], buf[base + 1], buf[base + 2], buf[base + 3]]);
+            let digest = buf[base + 4..base + 24].to_vec();
             page_descriptors.push(XexPageDescriptor {
                 info,
                 page_count: info >> 4,
-                digest: buf[base + 4..base + 24]
+                digest: digest
                     .iter()
                     .map(|b| format!("{b:02X}"))
                     .collect::<Vec<_>>()
