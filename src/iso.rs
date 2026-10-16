@@ -5,7 +5,7 @@ use std::io::{Read, Seek, SeekFrom};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::xex::XexExecInfo;
+use crate::xex::{allowed_media_names, XexExecInfo};
 
 /// Raw Xbox 360 ISO (GDF/GDFX) support, mirroring iso2god-rs `src/iso/`.
 /// Everything is seek-based so multi-GB images never get loaded.
@@ -89,8 +89,21 @@ pub struct IsoInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct XbeInfo {
-    pub title_id: String,
-    pub version: String,
+    pub title_id: String, // LE u32 at XBE header +8 (test-pinned)
+    pub version: String,  // LE u32 at XBE header +176 (test-pinned)
+    /// Certificate (at `CertificateAddress`, header +0x114): title name,
+    /// allowed media, game region, ratings, disc number, lan key, etc.
+    pub cert_size: Option<u32>,
+    pub cert_title_name: Option<String>,
+    pub allowed_media: Option<u32>,
+    pub allowed_media_names: Vec<String>,
+    pub game_region: Option<u32>,
+    pub game_region_names: Vec<String>,
+    pub game_ratings: Option<u32>,
+    pub disk_number: Option<u32>,
+    pub cert_version: Option<String>,
+    pub lan_key: Option<String>,
+    pub signature_key: Option<String>,
 }
 
 /// True when an entry path is the `$SystemUpdate` directory itself or lives
@@ -106,16 +119,105 @@ pub fn is_systemupdate_path(path: &str) -> bool {
 }
 
 /// Parse an original-Xbox XBE header: magic "XBEH", title ID LE u32 at +8,
-/// version LE u32 at +176 (iso2god-rs `TitleExecutionInfo::from_xbe`).
+/// version LE u32 at +176 (iso2god-rs `TitleExecutionInfo::from_xbe`),
+/// plus the certificate at `CertificateAddress` (header +0x114).
 pub fn parse_xbe_info(buf: &[u8]) -> Option<XbeInfo> {
-    if buf.len() < 180 || &buf[0..4] != b"XBEH" {
+    if buf.len() < 4 || &buf[0..4] != b"XBEH" {
         return None;
     }
-    let le = |o: usize| u32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]]);
-    Some(XbeInfo {
-        title_id: format!("{:08X}", le(8)),
-        version: format!("{:08X}", le(176)),
-    })
+    let le = |o: usize| -> Option<u32> {
+        let b = buf.get(o..o.checked_add(4)?)?;
+        Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    };
+    let title_id = le(8).map(|v| format!("{v:08X}"))?;
+    let version = le(176).map(|v| format!("{v:08X}"))?;
+
+    let mut info = XbeInfo {
+        title_id,
+        version,
+        cert_size: None,
+        cert_title_name: None,
+        allowed_media: None,
+        allowed_media_names: Vec::new(),
+        game_region: None,
+        game_region_names: Vec::new(),
+        game_ratings: None,
+        disk_number: None,
+        cert_version: None,
+        lan_key: None,
+        signature_key: None,
+    };
+
+    // Certificate: u32 size + 4B time + title_id + 80B UTF-16LE name +
+    // 64B alt title IDs + allowed media + region + ratings + disk number +
+    // version + 16B lan key + 16B signature key (+ 256B alt signature keys).
+    let cert_addr = le(0x114)? as usize;
+    if cert_addr > 0
+        && cert_addr.checked_add(4)? <= buf.len()
+        && cert_addr.checked_add(208)? <= buf.len()
+    {
+        let cert_size = le(cert_addr)? as usize;
+        if cert_size > 0 && cert_addr.checked_add(cert_size)? <= buf.len() {
+            info.cert_size = Some(cert_size as u32);
+            // 80-byte UTF-16LE title name at cert + 12.
+            let mut name_units = Vec::new();
+            for i in (12..92).step_by(2) {
+                let end = cert_addr.saturating_add(i).saturating_add(2);
+                if end > buf.len() {
+                    break;
+                }
+                let c = u16::from_le_bytes([buf[cert_addr + i], buf[cert_addr + i + 1]]);
+                if c == 0 {
+                    break;
+                }
+                name_units.push(c);
+            }
+            let title_name = String::from_utf16_lossy(&name_units);
+            if !title_name.is_empty() {
+                info.cert_title_name = Some(title_name);
+            }
+            info.allowed_media = le(cert_addr + 156);
+            info.allowed_media_names = info
+                .allowed_media
+                .map(allowed_media_names)
+                .unwrap_or_default();
+            info.game_region = le(cert_addr + 160);
+            info.game_region_names = info.game_region.map(game_region_names).unwrap_or_default();
+            info.game_ratings = le(cert_addr + 164);
+            info.disk_number = le(cert_addr + 168);
+            info.cert_version = le(cert_addr + 172).map(|v| format!("{v:08X}"));
+            info.lan_key = Some(hex16(buf, cert_addr + 176)?);
+            info.signature_key = Some(hex16(buf, cert_addr + 192)?);
+        }
+    }
+    Some(info)
+}
+
+/// Game region names (Iso2God `XbeGameRegion`).
+pub fn game_region_names(region: u32) -> Vec<String> {
+    let mut out = Vec::new();
+    if region == 0 {
+        return out;
+    }
+    if region & 0x0000_0001 != 0 {
+        out.push("North America".to_string());
+    }
+    if region & 0x0000_0002 != 0 {
+        out.push("Japan".to_string());
+    }
+    if region & 0x0000_0004 != 0 {
+        out.push("Rest of World".to_string());
+    }
+    if region & 0x8000_0000 != 0 {
+        out.push("Manufacturing".to_string());
+    }
+    out
+}
+
+/// 16 bytes as a lowercase hex string.
+fn hex16(buf: &[u8], off: usize) -> Option<String> {
+    let b = buf.get(off..off.checked_add(16)?)?;
+    Some(b.iter().map(|x| format!("{x:02X}")).collect())
 }
 
 /// Detect the ISO type by probing for `MICROSOFT*XBOX*MEDIA` at sector 0x20

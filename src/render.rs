@@ -428,6 +428,47 @@ pub(crate) fn render_report(report: &Report, show_entries: bool, show_strings: b
                 "XBE: title {} version {}\n",
                 info.info.title_id, info.info.version
             ));
+            if let Some(name) = &info.info.cert_title_name {
+                out.push_str(&format!("Certificate title: {name}\n"));
+            }
+            if let Some(v) = info.info.cert_size {
+                out.push_str(&format!("Certificate size: {v}\n"));
+            }
+            if let Some(v) = info.info.allowed_media {
+                out.push_str(&format!(
+                    "Allowed media: {v:08X}{}\n",
+                    if info.info.allowed_media_names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", info.info.allowed_media_names.join(", "))
+                    }
+                ));
+            }
+            if let Some(v) = info.info.game_region {
+                out.push_str(&format!(
+                    "Game region: {v:08X}{}\n",
+                    if info.info.game_region_names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({})", info.info.game_region_names.join(", "))
+                    }
+                ));
+            }
+            if let Some(v) = info.info.game_ratings {
+                out.push_str(&format!("Game ratings: {v:08X}\n"));
+            }
+            if let Some(v) = info.info.disk_number {
+                out.push_str(&format!("Disc number: {v}\n"));
+            }
+            if let Some(v) = &info.info.cert_version {
+                out.push_str(&format!("Certificate version: {v}\n"));
+            }
+            if let Some(k) = &info.info.lan_key {
+                out.push_str(&format!("LAN key: {k}\n"));
+            }
+            if let Some(k) = &info.info.signature_key {
+                out.push_str(&format!("Signature key: {k}\n"));
+            }
             out.push('\n');
         }
         Report::Xdbf(info) => {

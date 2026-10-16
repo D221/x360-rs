@@ -549,6 +549,68 @@ fn xbe_synthetic_parses() {
 }
 
 #[test]
+fn xbe_certificate_parses() {
+    let path = std::env::temp_dir().join(format!("tu_parser_xbecert_{}.xbe", std::process::id()));
+    let mut buf = vec![0u8; 0x400];
+    buf[0..4].copy_from_slice(b"XBEH");
+    // Header title id / version (test-pinned fields).
+    buf[8..12].copy_from_slice(&0x4D53084Du32.to_le_bytes());
+    buf[176..180].copy_from_slice(&0x00000002u32.to_le_bytes());
+    // CertificateAddress at header +0x114 -> 0x200.
+    buf[0x114..0x118].copy_from_slice(&0x200u32.to_le_bytes());
+    // Certificate at 0x200: size 208 (0xD0, covers all fields read).
+    buf[0x200..0x204].copy_from_slice(&208u32.to_le_bytes());
+    // cert+8 title id, cert+12 UTF-16LE name "TestBox".
+    buf[0x208..0x20C].copy_from_slice(&0xAABBCCDDu32.to_le_bytes());
+    let name = "TestBox".encode_utf16().collect::<Vec<_>>();
+    for (i, &c) in name.iter().enumerate() {
+        buf[0x20C + i * 2..0x20C + i * 2 + 2].copy_from_slice(&c.to_le_bytes());
+    }
+    // cert+156 allowed media = HardDisk|DvdX2 (3), cert+160 region = Japan (2).
+    buf[0x200 + 156..0x200 + 160].copy_from_slice(&3u32.to_le_bytes());
+    buf[0x200 + 160..0x200 + 164].copy_from_slice(&2u32.to_le_bytes());
+    // cert+164 ratings, cert+168 disk number 1, cert+172 cert version.
+    buf[0x200 + 164..0x200 + 168].copy_from_slice(&0x01020304u32.to_le_bytes());
+    buf[0x200 + 168..0x200 + 172].copy_from_slice(&1u32.to_le_bytes());
+    buf[0x200 + 172..0x200 + 176].copy_from_slice(&0x00000005u32.to_le_bytes());
+    // cert+176 lan key, cert+192 signature key.
+    for i in 0..16 {
+        buf[0x200 + 176 + i] = 0x11u8;
+        buf[0x200 + 192 + i] = 0x22u8;
+    }
+    std::fs::write(&path, &buf).unwrap();
+    let report = parse_file(&path).expect("synthetic xbe with cert parses");
+    std::fs::remove_file(&path).ok();
+    match report {
+        Report::Xbe(info) => {
+            assert_eq!(info.info.title_id, "4D53084D");
+            assert_eq!(info.info.version, "00000002");
+            assert_eq!(info.info.cert_size, Some(208));
+            assert_eq!(info.info.cert_title_name.as_deref(), Some("TestBox"));
+            assert_eq!(info.info.allowed_media, Some(3));
+            assert!(info
+                .info
+                .allowed_media_names
+                .contains(&"HardDisk".to_string()));
+            assert_eq!(info.info.game_region, Some(2));
+            assert!(info.info.game_region_names.contains(&"Japan".to_string()));
+            assert_eq!(info.info.game_ratings, Some(0x01020304));
+            assert_eq!(info.info.disk_number, Some(1));
+            assert_eq!(info.info.cert_version.as_deref(), Some("00000005"));
+            assert_eq!(
+                info.info.lan_key.as_deref(),
+                Some("11111111111111111111111111111111")
+            );
+            assert_eq!(
+                info.info.signature_key.as_deref(),
+                Some("22222222222222222222222222222222")
+            );
+        }
+        _ => panic!("expected xbe"),
+    }
+}
+
+#[test]
 fn unknown_file_rejected() {
     let path = std::env::temp_dir().join(format!("tu_parser_unk_{}.bin", std::process::id()));
     std::fs::write(&path, b"definitely not an xbox file................").unwrap();
