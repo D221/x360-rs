@@ -105,7 +105,7 @@ x360-rs file.account --dump-account -o account.json
 | `--game-dir <DIR>` | Parse an extracted game directory (tree stats + `default.xex`/`.xbe`) |
 | `--verify` | Verify STFS hashes (header, tables, data blocks); exit 1 on failure |
 | `--extract <DIR>` | Extract STFS contents into `DIR/<BaseTitleID>/` with tree recreation (hash-verified) |
-| `--extract-thumbnail <DIR>` | Extract STFS dashboard thumbnails into `DIR` as `<base-title-id>_<kind>.<format>` files |
+| `--extract-thumbnail <DIR>` | Extract STFS dashboard thumbnails into `DIR` as `<base-title-id>_<kind>.<format>` files; XPR0 textures are decoded to `.png` |
 | `--extract-iso <DIR>` | Extract XISO/GDF contents into `DIR/<TitleID>/` (multi-threaded, auto-best method) |
 | `--copy-out <PATH>` | Copy a single file or directory out of an XISO image (same as xdvdfs `copy-out`); uses `-o` as destination; requires one input file |
 | `--md5` | Print MD5 checksums for entries in XISO image(s) (same as xdvdfs `md5`; files and directory tables) |

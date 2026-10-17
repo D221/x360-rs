@@ -19,6 +19,7 @@ mod tu_parser;
 mod write;
 mod xdbf;
 mod xex;
+mod xpr;
 use anyhow::{Context, Result};
 use clap::Parser;
 

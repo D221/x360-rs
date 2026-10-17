@@ -534,12 +534,27 @@ pub(crate) fn extract_thumbnails(
     let mut count = 0u64;
     for t in &info.thumbnails {
         let data = read_at(reader, t.offset, t.size as usize)?;
-        let ext = match sniff_image_format(&data) {
-            "png" => "png",
-            "dds" => "dds",
-            "bmp" => "bmp",
-            "jpg" => "jpg",
-            _ => "bin",
+        let sniffed = sniff_image_format(&data);
+        let (bytes, ext) = if sniffed == "xpr" {
+            match crate::xpr::decode_xpr_to_png(&data) {
+                Ok(png_bytes) => (png_bytes, "png"),
+                Err(e) => {
+                    eprintln!(
+                        "warning: {} thumbnail XPR decode failed ({e}); writing raw blob",
+                        t.kind
+                    );
+                    (data, "xpr")
+                }
+            }
+        } else {
+            let ext = match sniffed {
+                "png" => "png",
+                "dds" => "dds",
+                "bmp" => "bmp",
+                "jpg" => "jpg",
+                _ => "bin",
+            };
+            (data, ext)
         };
         let out_path = out_dir.join(format!(
             "{}_{}.{}",
@@ -547,7 +562,7 @@ pub(crate) fn extract_thumbnails(
             t.kind,
             ext
         ));
-        std::fs::write(&out_path, &data)?;
+        std::fs::write(&out_path, &bytes)?;
         count += 1;
     }
     Ok(count)

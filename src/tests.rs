@@ -1533,3 +1533,193 @@ fn test_written_tables_chain_entries_right() {
     std::fs::remove_file(&out).ok();
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ---- XPR0 texture decode (reference: FtpContentManager XprPackage.cs) ----
+
+/// Build a minimal synthetic XPR0 blob: 0x800-byte header + pixel data.
+/// Field order per XprPackage.cs: magic, file_size, header_size,
+/// texture_common, texture_data, texture_lock, misc1, format, res1, res2.
+fn xpr0(format: u8, res2: u8, data: &[u8]) -> Vec<u8> {
+    let header_size = 0x800u32;
+    let file_size = header_size + data.len() as u32;
+    let mut b = Vec::new();
+    b.extend_from_slice(b"XPR0");
+    b.extend_from_slice(&file_size.to_le_bytes());
+    b.extend_from_slice(&header_size.to_le_bytes());
+    b.extend_from_slice(&0u32.to_le_bytes()); // texture_common
+    b.extend_from_slice(&0u32.to_le_bytes()); // texture_data
+    b.extend_from_slice(&0u32.to_le_bytes()); // texture_lock
+    b.push(0); // misc1
+    b.push(format);
+    b.push(0); // res1
+    b.push(res2);
+    b.resize(header_size as usize, 0);
+    b.extend_from_slice(data);
+    b
+}
+
+/// Decode PNG bytes back to RGBA for round-trip verification.
+fn decode_png(bytes: &[u8]) -> (u32, u32, Vec<u8>) {
+    let dec = png::Decoder::new(std::io::Cursor::new(bytes));
+    let mut reader = dec.read_info().expect("png header");
+    let mut out = vec![0u8; reader.output_buffer_size().expect("output size")];
+    let info = reader.next_frame(&mut out).expect("png frame");
+    (info.width, info.height, out)
+}
+
+#[test]
+fn xpr_dxt1_decode_matches_reference() {
+    use crate::xpr::decode_xpr_to_png;
+    // One 4x4 DXT1 block: c0 = red 565, c1 = green 565, c0 > c1
+    // (4-color mode). Row 0 indices 0,1,2,3; rows 1-3 index 0.
+    let mut block = Vec::new();
+    block.extend_from_slice(&0xF800u16.to_le_bytes());
+    block.extend_from_slice(&0x07E0u16.to_le_bytes());
+    block.extend_from_slice(&0x0000_00E4u32.to_le_bytes());
+    let blob = xpr0(0x0C, 2, &block);
+    let png_bytes = decode_xpr_to_png(&blob).expect("decodes to png");
+    let (w, h, px) = decode_png(&png_bytes);
+    assert_eq!((w, h), (4, 4));
+    let expect = |x: usize, y: usize| -> [u8; 4] {
+        match (x, y) {
+            (0, 0) => [255, 0, 0, 255],
+            (1, 0) => [0, 255, 0, 255],
+            (2, 0) => [170, 85, 0, 255],
+            (3, 0) => [85, 170, 0, 255],
+            _ => [255, 0, 0, 255],
+        }
+    };
+    for y in 0..4 {
+        for x in 0..4 {
+            let i = (y * 4 + x) * 4;
+            assert_eq!(&px[i..i + 4], &expect(x, y), "pixel ({x},{y})");
+        }
+    }
+}
+
+#[test]
+fn xpr_dxt1_transparent_mode() {
+    use crate::xpr::decode_xpr_to_png;
+    // c0 < c1: index 2 averages the endpoints, index 3 is opaque
+    // black (reference DecompressBlockDxt1 switch).
+    let mut block = Vec::new();
+    block.extend_from_slice(&0x0000u16.to_le_bytes());
+    block.extend_from_slice(&0xFFFFu16.to_le_bytes());
+    block.extend_from_slice(&0b11_10_01_00u32.to_le_bytes());
+    let blob = xpr0(0x0C, 2, &block);
+    let (_, _, px) = decode_png(&decode_xpr_to_png(&blob).unwrap());
+    assert_eq!(&px[0..4], &[0, 0, 0, 255]);
+    assert_eq!(&px[4..8], &[255, 255, 255, 255]);
+    assert_eq!(&px[8..12], &[127, 127, 127, 255]);
+    assert_eq!(&px[12..16], &[0, 0, 0, 255]);
+}
+
+#[test]
+fn xpr_argb_decode_png_roundtrip() {
+    use crate::xpr::decode_xpr_to_png;
+    // 2x2 BGRA pixels; the reference reads B,G,R,A and emits RGBA.
+    let data: [u8; 16] = [
+        10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150, 160,
+    ];
+    let blob = xpr0(0x14, 1, &data);
+    let png_bytes = decode_xpr_to_png(&blob).expect("decodes to png");
+    let (w, h, px) = decode_png(&png_bytes);
+    assert_eq!((w, h), (2, 2));
+    assert_eq!(&px[0..8], &[30, 20, 10, 40, 70, 60, 50, 80]);
+    assert_eq!(&px[8..16], &[110, 100, 90, 120, 150, 140, 130, 160]);
+}
+
+#[test]
+fn stfs_thumbnail_xpr_extracted_as_png() {
+    use crate::tu_header::sniff_image_format;
+    use crate::tu_parser::TuParser;
+    assert_eq!(sniff_image_format(b"XPR0head"), "xpr");
+    let dir = std::env::temp_dir().join(format!("tu_xprthumb_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("thumb_xpr.bin");
+    let mut buf = vec![0u8; 0xC0C0];
+    buf[0..4].copy_from_slice(b"LIVE");
+    buf[0x340..0x344].copy_from_slice(&0xAD0Eu32.to_be_bytes());
+    buf[0x344..0x348].copy_from_slice(&0x00000002u32.to_be_bytes());
+    buf[0x348..0x34C].copy_from_slice(&2u32.to_be_bytes());
+    buf[0x354..0x358].copy_from_slice(&0u32.to_be_bytes());
+    buf[0x360..0x364].copy_from_slice(&0x58410886u32.to_be_bytes());
+    buf[0x379] = 0x24;
+    buf[0x37C..0x37E].copy_from_slice(&1u16.to_le_bytes());
+    buf[0x395..0x399].copy_from_slice(&1u32.to_be_bytes());
+    // XPR0 4x4 DXT1 thumbnail blob at 0x171A.
+    let mut block = Vec::new();
+    block.extend_from_slice(&0xF800u16.to_le_bytes());
+    block.extend_from_slice(&0x07E0u16.to_le_bytes());
+    block.extend_from_slice(&0x0000_00E4u32.to_le_bytes());
+    let xpr = xpr0(0x0C, 2, &block);
+    buf[0x1712..0x1716].copy_from_slice(&(xpr.len() as u32).to_be_bytes());
+    buf[0x1716..0x171A].copy_from_slice(&0u32.to_be_bytes());
+    buf[0x171A..0x171A + xpr.len()].copy_from_slice(&xpr);
+    let title: Vec<u16> = "Xpr Game".encode_utf16().collect();
+    for (i, c) in title.iter().enumerate() {
+        buf[0x411 + i * 2..0x411 + i * 2 + 2].copy_from_slice(&c.to_be_bytes());
+    }
+    buf[0xC000..0xC00B].copy_from_slice(b"DSDLKey.bin");
+    buf[0xC000 + 0x28] = 0x40 | 11;
+    buf[0xC000 + 0x34..0xC000 + 0x38].copy_from_slice(&21u32.to_be_bytes());
+    std::fs::write(&path, &buf).unwrap();
+
+    let mut parser = TuParser::open(&path).unwrap();
+    let info = parser.parse().unwrap();
+    assert_eq!(info.thumbnails[0].format, "xpr");
+    let out = dir.join("out");
+    let mut reader = std::io::BufReader::new(std::fs::File::open(&path).unwrap());
+    let n = crate::stfs::extract_thumbnails(&mut reader, &info, &out).unwrap();
+    assert_eq!(n, 1);
+    let dest = out.join("58410886_thumbnail.png");
+    assert!(dest.exists(), "decoded png written");
+    let bytes = std::fs::read(&dest).unwrap();
+    let (w, h, _) = decode_png(&bytes);
+    assert_eq!((w, h), (4, 4));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn stfs_thumbnail_unknown_xpr_format_kept_raw() {
+    use crate::tu_parser::TuParser;
+    let dir = std::env::temp_dir().join(format!("tu_xprraw_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("thumb_raw.bin");
+    let mut buf = vec![0u8; 0xC0C0];
+    buf[0..4].copy_from_slice(b"LIVE");
+    buf[0x340..0x344].copy_from_slice(&0xAD0Eu32.to_be_bytes());
+    buf[0x344..0x348].copy_from_slice(&0x00000002u32.to_be_bytes());
+    buf[0x348..0x34C].copy_from_slice(&2u32.to_be_bytes());
+    buf[0x354..0x358].copy_from_slice(&0u32.to_be_bytes());
+    buf[0x360..0x364].copy_from_slice(&0x58410886u32.to_be_bytes());
+    buf[0x379] = 0x24;
+    buf[0x37C..0x37E].copy_from_slice(&1u16.to_le_bytes());
+    buf[0x395..0x399].copy_from_slice(&1u32.to_be_bytes());
+    // XPR0 magic but unsupported texture format byte.
+    let xpr = xpr0(0x99, 2, &[0u8; 8]);
+    buf[0x1712..0x1716].copy_from_slice(&(xpr.len() as u32).to_be_bytes());
+    buf[0x1716..0x171A].copy_from_slice(&0u32.to_be_bytes());
+    buf[0x171A..0x171A + xpr.len()].copy_from_slice(&xpr);
+    let title: Vec<u16> = "Raw Game".encode_utf16().collect();
+    for (i, c) in title.iter().enumerate() {
+        buf[0x411 + i * 2..0x411 + i * 2 + 2].copy_from_slice(&c.to_be_bytes());
+    }
+    buf[0xC000..0xC00B].copy_from_slice(b"DSDLKey.bin");
+    buf[0xC000 + 0x28] = 0x40 | 11;
+    buf[0xC000 + 0x34..0xC000 + 0x38].copy_from_slice(&21u32.to_be_bytes());
+    std::fs::write(&path, &buf).unwrap();
+
+    let mut parser = TuParser::open(&path).unwrap();
+    let info = parser.parse().unwrap();
+    let out = dir.join("out");
+    let mut reader = std::io::BufReader::new(std::fs::File::open(&path).unwrap());
+    let n = crate::stfs::extract_thumbnails(&mut reader, &info, &out).unwrap();
+    assert_eq!(n, 1);
+    let dest = out.join("58410886_thumbnail.xpr");
+    assert!(dest.exists(), "raw fallback written");
+    assert_eq!(std::fs::read(&dest).unwrap(), xpr);
+    let _ = std::fs::remove_dir_all(&dir);
+}

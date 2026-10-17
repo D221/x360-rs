@@ -29,6 +29,8 @@ pub struct StfsThumbnail {
 pub fn sniff_image_format(blob: &[u8]) -> &'static str {
     if blob.starts_with(b"\x89PNG\r\n\x1a\n") {
         "png"
+    } else if blob.starts_with(b"XPR0") {
+        "xpr"
     } else if blob.starts_with(b"DDS ") {
         "dds"
     } else if blob.starts_with(b"BM") {
